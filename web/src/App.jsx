@@ -336,16 +336,28 @@ function SessionItem({
         </span>
       )}
       {hover && !editing && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete()
-          }}
-          title="删除会话"
-          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: '0 2px' }}
-        >
-          ✕
-        </button>
+        <>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onStartEdit()
+            }}
+            title="重命名"
+            style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: '0 2px' }}
+          >
+            ✎
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
+            title="删除会话"
+            style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: '0 2px' }}
+          >
+            ✕
+          </button>
+        </>
       )}
     </div>
   )
