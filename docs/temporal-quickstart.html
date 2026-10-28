@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Temporal Quick Start —— ys-sandbox 视角</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --fg-2: #555555;
+    --fg-3: #888888;
+    --line: #e4e4e4;
+    --line-2: #d0d0d0;
+    --code-bg: #f6f7f8;
+    --code-border: #e8e8e8;
+    --th-bg: #f2f3f4;
+    --accent: #2563eb;
+    --accent-soft: #eff4fd;
+    --warn-bg: #fdf6ec;
+    --warn-line: #e8d9b8;
+    --key-bg: #f0f7f0;
+    --key-line: #c8e0c8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181a;
+      --fg: #d8dadd;
+      --fg-2: #a0a3a8;
+      --fg-3: #74787e;
+      --line: #2c2f33;
+      --line-2: #3a3e43;
+      --code-bg: #1e2124;
+      --code-border: #2c2f33;
+      --th-bg: #222528;
+      --accent: #6ea8fe;
+      --accent-soft: #1c2431;
+      --warn-bg: #28241c;
+      --warn-line: #4a4130;
+      --key-bg: #1c2620;
+      --key-line: #33473a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+
+  /* ---------- reading rail ---------- */
+  .rail {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 236px;
+    padding: 48px 24px 24px 32px;
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  .rail .doc-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-2);
+    letter-spacing: 0.02em;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .rail a {
+    display: block;
+    color: var(--fg-2);
+    text-decoration: none;
+    font-size: 13.5px;
+    padding: 5px 0;
+    line-height: 1.5;
+  }
+  .rail a:hover { color: var(--accent); }
+  .rail a.l2 { padding-left: 16px; font-size: 13px; color: var(--fg-3); }
+  .rail a.l2:hover { color: var(--accent); }
+
+  /* ---------- main ---------- */
+  main {
+    margin-left: 236px;
+    padding: 56px 64px 120px;
+    max-width: 980px;
+  }
+  @media (max-width: 1080px) {
+    .rail { display: none; }
+    main { margin-left: 0; padding: 40px 22px 100px; }
+  }
+
+  h1 {
+    font-size: 27px;
+    line-height: 1.35;
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  .meta {
+    color: var(--fg-3);
+    font-size: 13.5px;
+    margin-bottom: 8px;
+  }
+  .lede {
+    font-size: 16px;
+    color: var(--fg-2);
+    border-left: 3px solid var(--accent);
+    padding: 2px 0 2px 14px;
+    margin: 26px 0 40px;
+  }
+  h2 {
+    font-size: 21px;
+    margin: 56px 0 6px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    letter-spacing: -0.01em;
+  }
+  h2 .sec-no { color: var(--fg-3); font-weight: 500; margin-right: 8px; }
+  h3 {
+    font-size: 16.5px;
+    margin: 34px 0 10px;
+  }
+  p { margin: 12px 0; }
+  ul, ol { padding-left: 24px; margin: 12px 0; }
+  li { margin: 5px 0; }
+  strong { font-weight: 600; }
+  code.inline, p code, li code, td code, th code {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  /* ---------- code blocks ---------- */
+  .codeblock {
+    margin: 16px 0 20px;
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .codeblock .label {
+    display: flex;
+    justify-content: space-between;
+    background: var(--th-bg);
+    border-bottom: 1px solid var(--code-border);
+    color: var(--fg-3);
+    font-size: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    padding: 6px 14px;
+  }
+  .codeblock pre {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--code-bg);
+    overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--fg);
+  }
+  .codeblock .cm { color: var(--fg-3); }              /* comments */
+  .codeblock .kw { color: var(--accent); }            /* keywords */
+  .codeblock .hi { background: var(--accent-soft); }  /* emphasized line */
+
+  pre.diagram, pre.plain {
+    margin: 16px 0 20px;
+    padding: 16px 18px;
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  pre.plain { font-size: 13px; line-height: 1.7; }
+
+  /* ---------- tables ---------- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 22px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+  }
+  th {
+    background: var(--th-bg);
+    font-weight: 600;
+    font-size: 13.5px;
+    white-space: nowrap;
+  }
+  td:first-child { white-space: nowrap; font-weight: 500; }
+
+  /* ---------- callouts ---------- */
+  .callout {
+    margin: 18px 0;
+    padding: 12px 16px;
+    border: 1px solid var(--line-2);
+    border-left: 3px solid var(--fg-3);
+    border-radius: 0 6px 6px 0;
+    background: var(--code-bg);
+    font-size: 14.5px;
+  }
+  .callout.key {
+    border-left-color: #3d9950;
+    background: var(--key-bg);
+    border-color: var(--key-line);
+  }
+  .callout.warn {
+    border-left-color: #c08a1d;
+    background: var(--warn-bg);
+    border-color: var(--warn-line);
+  }
+  .callout .tag {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-3);
+    margin-right: 8px;
+    letter-spacing: 0.04em;
+  }
+
+  hr.soft { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  .q-box {
+    margin: 18px 0;
+    padding: 12px 16px;
+    border: 1px dashed var(--line-2);
+    border-radius: 6px;
+    color: var(--fg-2);
+    font-size: 14.5px;
+  }
+  .q-box .q-mark { color: var(--accent); font-weight: 600; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="doc-title">Temporal Quick Start<br>ys-sandbox 视角</div>
+  <a href="#s1">§1 是什么（mental model）</a>
+  <a href="#s1-roles" class="l2">三个角色</a>
+  <a href="#s1-concepts" class="l2">核心概念</a>
+  <a href="#s1-arch" class="l2">架构总图</a>
+  <a href="#s15">§1.5 ys-server 怎么"调用"</a>
+  <a href="#s2">§2 怎么做（event history + replay）</a>
+  <a href="#s3">§3 为什么（设计动机）</a>
+  <a href="#s4">§4 实际例子：csv 汇总走查</a>
+  <a href="#s4-recover" class="l2">恢复走查</a>
+  <a href="#s4-death" class="l2">各种死法对照</a>
+</nav>
+
+<main>
+
+<h1>Temporal Quick Start —— ys-sandbox 视角</h1>
+<div class="meta">读者预设：资深后端工程师，第一次接触 durable execution · 目标：理解 Temporal 在 ys-sandbox 里的角色、调用方式、崩溃恢复机制</div>
+
+<p class="lede">一句话：<strong>Temporal 让你的函数调用有记性</strong>——每一步（activity）完成后，结果被写进它自己的 PostgreSQL（event history）；进程死了，新进程读 PG 里的记录，从断点接着跑。</p>
+
+<h2 id="s1"><span class="sec-no">§1</span>是什么（mental model）</h2>
+
+<p>Temporal server 本质上就是<strong>无状态服务层 + 一个 PostgreSQL</strong>。它<em>从不执行你的代码</em>——你写的 workflow / activity 全部跑在你自己的进程（ys-worker）里。Temporal server 只做两件事：</p>
+<ul>
+  <li><strong>派活</strong>：把待执行的 workflow / activity 任务分发给轮询中的 worker；</li>
+  <li><strong>记账</strong>：把每一步的结果写进 PG，形成 event history——这是整个系统执行进度的唯一真相。</li>
+</ul>
+
+<h3 id="s1-roles">三个角色</h3>
+<p>ys-sandbox 的运行时由三个角色组成，其中两个是我们自己的 Go 二进制，一个是 Temporal：</p>
+<table>
+  <tr><th>角色</th><th>是什么</th><th>有状态吗</th><th>职责</th></tr>
+  <tr>
+    <td>ys-server</td>
+    <td>我们的 Go 二进制①（HTTP API + 内嵌 SPA）</td>
+    <td>无状态</td>
+    <td>门房：收浏览器消息、写 Redis 队列、启动 workflow、推"有变化"信号</td>
+  </tr>
+  <tr>
+    <td>Temporal server</td>
+    <td>独立服务（docker-compose 起）+ PG</td>
+    <td>服务无状态，真相在 PG</td>
+    <td>调度员 + 记事本：派活、记账、闹钟</td>
+  </tr>
+  <tr>
+    <td>ys-worker</td>
+    <td>我们的 Go 二进制②</td>
+    <td>无状态</td>
+    <td>agent 本体：跑 TurnWorkflow 的代码，轮询领活</td>
+  </tr>
+</table>
+
+<h3 id="s1-concepts">核心概念</h3>
+<table>
+  <tr><th>概念</th><th>含义</th></tr>
+  <tr><td>Workflow</td><td>一个多步骤过程，例如一个 turn（用户发一条消息到 agent 给出回复的完整循环）</td></tr>
+  <tr><td>Activity</td><td>workflow 中的一步；所有碰外界的操作（读 Redis、调 LLM、调 VM）都在 activity 里</td></tr>
+  <tr><td>Task Queue</td><td>Temporal 内部分配任务的队列；worker 按队列名轮询领活</td></tr>
+  <tr><td>Event History</td><td>PG 里的账本：每个已完成的 activity 的输入输出都记在这里</td></tr>
+  <tr><td>Replay</td><td>重放：恢复时函数从头跑，但已完成的 activity 短路返回历史结果，不真实执行</td></tr>
+  <tr><td>Signal</td><td>往一个正在运行的 workflow 里发消息（如"用户又发来一条"、"批准了这个操作"）</td></tr>
+  <tr><td>Durable Timer</td><td>闹钟；worker 全挂也照响——因为它记在 PG 里，由 Temporal server 触发</td></tr>
+</table>
+
+<h3 id="s1-arch">架构总图与关键事实</h3>
+
+<div class="callout key"><span class="tag">关键架构事实</span>
+<ul style="margin:6px 0 2px;">
+  <li>ys-server 和 ys-worker <strong>从不直接通信</strong>，一次 RPC 都没有；所有协调都经过 Temporal + Redis。</li>
+  <li>worker 是<strong>主动轮询</strong>领活，不是 server 推送 → worker 可以随便重启、随便扩容。</li>
+  <li>整个系统只有三处有状态：<strong>PG</strong>（执行进度）、<strong>Redis</strong>（业务状态）、<strong>VM 快照</strong>（环境）。进程全部无状态。</li>
+</ul>
+</div>
+
+<pre class="diagram">                        ┌────────────────────────────────────┐
+  浏览器 SPA            │           你的 Linux 服务器        │
+      │                 │                                    │
+      │ HTTP            │   ┌─────────────┐                  │
+      ▼                 │   │  ys-server  │ ← 我们的二进制①  │
+      └────────────────▶│   │ (HTTP API)  │                  │
+                        │   └──┬───────┬──┘                  │
+                        │  ①写队列│       │②启动workflow     │
+                        │      ▼       ▼                     │
+                        │   ┌────────┐  ┌──────────────────┐ │
+                        │   │ Redis  │  │ Temporal server  │ │
+                        │   │业务状态│  │ (无状态服务层)   │ │
+                        │   └────────┘  └───┬──────────▲───┘ │
+                        │              ③派活│          │④汇报│
+                        │      ┌──────────▼──────────┴───┐   │
+                        │      │       PostgreSQL        │   │
+                        │      │(event history, 执行真相)│   │
+                        │      └──────────────────────────┘  │
+                        │                                    │
+                        │   ┌─────────────┐                  │
+                        │   │  ys-worker  │ ← 我们的二进制②  │
+                        │   │ (跑 turn)   │                  │
+                        │   └──┬──────────┘                  │
+                        │      │⑤ Connect-RPC                │
+                        │      ▼                             │
+                        │   ┌─────────────┐                  │
+                        │   │ Firecracker │                  │
+                        │   │ VM (agentd) │                  │
+                        │   └─────────────┘                  │
+                        └────────────────────────────────────┘</pre>
+
+<h2 id="s15"><span class="sec-no">§1.5</span>ys-server 怎么"调用" Temporal</h2>
+
+<div class="q-box"><span class="q-mark">Q</span>ys-server 居然就是简单调用一下？需要部署一个独立的服务去调用 Temporal 吗？</div>
+
+<p><strong>不需要任何独立服务——Temporal 的 client 就是一个普通 Go 库</strong>（<code>go.temporal.io/sdk/client</code>），import 进 ys-server 就完事。类比：ys-server 连 Redis 用的是 go-redis 库，连 Temporal 用的是 temporal client 库，<strong>两者是同等级别的东西</strong>——一个带连接池的 RPC 客户端。需要独立部署的是 Temporal server 本身（docker-compose 里的一条），而不是"调用方"。</p>
+
+<p>ys-server 处理"用户发消息"的完整逻辑就这些：</p>
+
+<div class="codeblock">
+  <div class="label"><span>ys-server / handle_send.go</span><span>伪代码</span></div>
+<pre><span class="cm">// ys-server 里处理"用户发消息"的 handler</span>
+<span class="kw">func</span> handleSend(w http.ResponseWriter, r *http.Request) {
+    msg := parse(r)                          <span class="cm">// {id: uuid, session: s1, text: "..."}</span>
+
+    <span class="cm">// ① 幂等去重（s16 Sending：唯一 ID 让重试安全）</span>
+    <span class="kw">if</span> !redis.SetNX(<span>"msg:seen:"</span>+msg.ID, 1, 24h) {
+        <span class="kw">return</span> OK(<span>"duplicate dropped"</span>)
+    }
+    <span class="cm">// ② 消息落库 + 进会话队列（s16 The turn）</span>
+    redis.RPush(<span>"session:"</span>+msg.Session+<span>":queue"</span>, msg)
+
+    <span class="cm">// ③ 若该会话当前没有在跑的 turn，启动一个 TurnWorkflow</span>
+    <span class="kw">if</span> redis.SetNX(<span>"session:"</span>+msg.Session+<span>":active"</span>, 1, 10min) {
+        temporalClient.ExecuteWorkflow(ctx,            <span class="cm">// ← 就是一次 RPC</span>
+            workflowOptions{WorkflowID: <span>"turn-"</span>+uuid, TaskQueue: <span>"agent"</span>},
+            TurnWorkflow, TurnInput{SessionID: msg.Session})
+    }
+    <span class="kw">return</span> OK()                              <span class="cm">// 全程 &lt;10ms</span>
+}</pre>
+</div>
+
+<p><code>ExecuteWorkflow</code> 的本质：<strong>向 Temporal server 发一个 RPC，效果约等于往 PG 写一行"这个 workflow 该跑了"</strong>。之后 ys-server 与这件事再无关系——不持有连接、不等结果、不知道 agent 想了什么。回复的送达走另一条路（Redis → SSE，见 §4）。</p>
+
+<p>ys-server 对 Temporal 的全部操作就四类：</p>
+<table>
+  <tr><th>操作</th><th>作用</th><th>ys-sandbox 里的用法</th></tr>
+  <tr><td><code>ExecuteWorkflow</code></td><td>启动一个 workflow</td><td>会话空闲时收到新消息 → 启动 TurnWorkflow</td></tr>
+  <tr><td><code>SignalWorkflow</code></td><td>往跑着的 workflow 发消息</td><td>"用户又发来一条"、"批准了这个操作"</td></tr>
+  <tr><td><code>QueryWorkflow</code></td><td>查 workflow 当前状态</td><td>调试用（业务状态在 Redis，正常不走这条）</td></tr>
+  <tr><td><code>CancelWorkflow</code></td><td>取消一个 workflow</td><td>用户打断当前 turn</td></tr>
+</table>
+
+<h2 id="s2"><span class="sec-no">§2</span>怎么做（机制：event history + replay）</h2>
+
+<p>先看 ys-worker 里注册的真实代码形状。一个 turn 的 agent loop 就是 TurnWorkflow：</p>
+
+<div class="codeblock">
+  <div class="label"><span>ys-worker / turn_workflow.go</span><span>伪代码</span></div>
+<pre><span class="kw">func</span> TurnWorkflow(ctx workflow.Context, in TurnInput) error {
+    <span class="cm">// 每个 ExecuteActivity 完成时，Temporal server 自动把结果写进 PG</span>
+    state := workflow.ExecuteActivity(ctx, LoadSession, in.SessionID)   <span class="cm">// 从 Redis 读会话</span>
+    reply := workflow.ExecuteActivity(ctx, CallLLM, state, in.Messages) <span class="cm">// 调模型（花钱的）</span>
+    <span class="kw">for</span> reply.HasToolCalls() {
+        result := workflow.ExecuteActivity(ctx, ExecTool, reply.Tool)   <span class="cm">// Connect-RPC 调 VM agentd</span>
+        reply   = workflow.ExecuteActivity(ctx, CallLLM, state, result)
+    }
+    <span class="kw">return</span> workflow.ExecuteActivity(ctx, SaveReply, reply)              <span class="cm">// 回复落 Redis + 发"changed"信号</span>
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="label"><span>ys-worker / main.go</span><span>worker 注册</span></div>
+<pre>w := worker.New(temporalClient, <span>"agent"</span>, worker.Options{})
+w.RegisterWorkflow(TurnWorkflow)
+w.RegisterActivity(LoadSession); w.RegisterActivity(CallLLM)
+w.RegisterActivity(ExecTool);    w.RegisterActivity(SaveReply)
+w.Run() <span class="cm">// 内部：长轮询 Temporal server 领活</span></pre>
+</div>
+
+<h3>event history：PG 里的账本</h3>
+<p>正常跑一个"汇总 csv"的例子时，PG 里会长出这样的记录：</p>
+
+<pre class="plain">Event 1: WorkflowStarted      (input: session=s1)
+Event 2: ActivityScheduled    (LoadSession)
+Event 3: ActivityCompleted    (LoadSession, result={会话历史…})
+Event 4: ActivityScheduled    (CallLLM)
+Event 5: ActivityCompleted    (CallLLM, result="我要exec ls")   ← 模型结果也记下了
+Event 6: ActivityScheduled    (ExecTool, ls ~/downloads)
+Event 7: ActivityCompleted    (ExecTool, result="a.csv b.csv")
+…</pre>
+
+<div class="callout key"><span class="tag">关键</span><strong>只有完成的 activity 才入账。</strong>这是理解恢复机制的全部前提：账本里没有完成记录的步骤，就是恢复后要真正重做的步骤。</div>
+
+<h3>replay：代码"快进"到断点</h3>
+<p>恢复时，新 worker 拿到这个 workflow，<strong>从头执行 TurnWorkflow 的函数代码</strong>——但每个 <code>ExecuteActivity</code> 调用先查账：</p>
+<ul>
+  <li>账上有 <code>ActivityCompleted</code> → <strong>直接返回历史结果</strong>，不真实执行（LLM 不重调，钱不重烧）；</li>
+  <li>账上没有完成记录 → 才真正派活执行，完成后补记到账上。</li>
+</ul>
+<p>从函数视角看，代码就像"快进"到了断点：前面的步骤瞬间返回旧值，第一个没记账的步骤才真正跑。</p>
+
+<div class="callout warn"><span class="tag">代价</span><strong>确定性约束</strong>：workflow 函数里不能碰网络 / 时钟 / 随机数——这些全部得放进 activity。否则重放时两次执行结果不一致，账本就对不上了。这也是 TurnWorkflow 里每一行都是 <code>ExecuteActivity</code> 的原因：workflow 只编排，activity 才碰世界。</div>
+
+<h2 id="s3"><span class="sec-no">§3</span>为什么（设计动机）</h2>
+
+<p>agent 的 turn 完美符合 durable execution 的三个目标特征：</p>
+<ul>
+  <li><strong>多步骤</strong>：model ↔ tools 循环，一个 turn 少则两三步、多则几十步；</li>
+  <li><strong>长时间</strong>：几分钟是常态，远超一次 HTTP 请求的生命周期；</li>
+  <li><strong>怕崩溃</strong>：LLM API 本身就抖，而且每次调用都烧钱——重来一遍不只是慢，是贵。</li>
+</ul>
+
+<p>家谱上，Temporal 源自 Uber 的 <strong>Cadence</strong>——打车行程是天然的长流程（接单 → 行程中 → 支付 → 评价，跨几小时、跨无数进程重启）。同族产品：<strong>AWS Step Functions</strong>、<strong>Azure Durable Functions</strong>、<strong>Restate</strong>。它们解决的是同一类问题：多步骤、长时间、怕崩溃的过程，怎么在"进程随时会死"的现实里可靠跑完。</p>
+
+<h3>四种架构，worker 崩溃时各损失什么</h3>
+<table>
+  <tr><th>架构</th><th>长流程怎么放</th><th>worker 崩溃时</th></tr>
+  <tr><td>单体</td><td>全在一个进程内存里</td><td>全死，进度随进程蒸发</td></tr>
+  <tr><td>微服务 RPC</td><td>步骤散在多个服务的调用栈里</td><td>进度归零——调用栈没了，没人记得跑到哪</td></tr>
+  <tr><td>消息队列</td><td>步骤间用消息传递</td><td>从头再来——消费位点只记到步骤粒度，步骤间状态自己想办法</td></tr>
+  <tr><td>durable execution</td><td>一个函数写到底，进度自动入账</td><td><strong>断点续跑</strong>——重放函数，已完成步骤短路返回</td></tr>
+</table>
+
+<h3>不用 Temporal，要手写什么</h3>
+<table>
+  <tr><th>能力</th><th>手写版本长什么样</th></tr>
+  <tr><td>每步进度存取 + 重放逻辑</td><td>自己设计 checkpoint 格式、存取时机、恢复时按状态机跳转——每个 workflow 类型一份</td></tr>
+  <tr><td>VM 休眠闹钟</td><td>e2b 那个 50ms 轮询 Redis zset 的 evictor—— Temporal 的 durable timer 一条调用替代</td></tr>
+  <tr><td>LLM 429 重试循环 + 状态机</td><td>每个 activity 自己写重试/退避，崩溃后还得知道"重试到哪一步了"</td></tr>
+  <tr><td>每步可观测埋点</td><td>自己打日志/指标——Temporal 的 event history 天然就是完整的执行审计</td></tr>
+</table>
+<p>Temporal 把这四行全给了。这不是"少写代码"的问题，是<strong>这些基础设施代码一旦手写，每个 bug 都直接换算成线上事故</strong>。</p>
+
+<h2 id="s4"><span class="sec-no">§4</span>实际例子（完整走查）</h2>
+
+<p>场景：用户在浏览器里发<strong>"帮我把 downloads 里的 csv 汇总一下"</strong>，此时 VM 处于休眠状态。</p>
+
+<h3>正常流程时序</h3>
+<pre class="plain">━━━ ys-server 的部分（&lt;10ms）━━━
+浏览器 POST /send → SETNX msg:seen:{uuid} 去重 → RPush session:s1:queue
+→ 无 active turn → ExecuteWorkflow(TurnWorkflow) → 返回 200
+（ys-server 责任到此结束）
+
+━━━ Temporal server（只记事）━━━
+记下 workflow 待执行 → 派给轮询中的 ys-worker
+
+━━━ ys-worker（agent loop，几分钟）━━━
+LoadSession（读 Redis 历史+队列消息）
+→ CallLLM（模型说"我要 exec"）
+→ ExecTool（Connect-RPC → VM agentd 跑 shell；VM 睡着 → 先 ResumeVM 唤醒）
+→ CallLLM（模型给出汇总结论）
+→ SaveReply（回复写 Redis + INCR seq + PUBLISH "changed"）
+→ workflow 完成
+
+━━━ 浏览器怎么看到的 ━━━
+ys-server 的 SSE 收到 Redis "changed" → 推给浏览器
+→ 浏览器 GET /messages?after=42 → ys-server 从 Redis 读 → 显示</pre>
+
+<p>注意最后一段：回复的送达<strong>不经过 Temporal</strong>。Temporal 管"agent 干活"的过程可靠性；浏览器看到结果走的是 ys-server 已有的 Redis → SSE → 拉取通道。两条路各司其职。</p>
+
+<h3 id="s4-recover">恢复走查：ys-worker 中途被 OOM 杀掉</h3>
+<p>假设 ys-worker 在 <code>CallLLM</code> 完成后、<code>ExecTool</code> 执行前被杀：</p>
+
+<pre class="plain">PG 账目停在 Event 5（CallLLM 已完成，ExecTool 还没跑）
+Temporal server 发现 workflow 没结束、worker 没心跳 → 派给新 worker
+新 worker 重放 TurnWorkflow：
+  ExecuteActivity(LoadSession) → 查账有 Event 3 → 返回旧结果（没真跑）
+  ExecuteActivity(CallLLM)     → 查账有 Event 5 → 返回 "我要exec ls"
+                                 ★ 模型没有重调，钱没重烧 ★
+  ExecuteActivity(ExecTool)    → 没有完成记录 → 真正执行
+  …继续到结束</pre>
+
+<p>对用户来说，只是这个 turn 慢了几秒。对系统来说，一次进程崩溃被完全消化，无任何人工介入。</p>
+
+<h3 id="s4-death">各种死法对照表</h3>
+<table>
+  <tr><th>谁挂了</th><th>损失</th><th>恢复方式</th></tr>
+  <tr><td>ys-server</td><td>无</td><td>客户端重试 + msg ID 幂等（SETNX 去重挡掉重复投递）</td></tr>
+  <tr><td>ys-worker（activity 之间）</td><td>无</td><td>新 worker 重放，从断点继续</td></tr>
+  <tr><td>ys-worker（activity 中途）</td><td>这一步重做</td><td>activity 重试 + 幂等键——<code>ls</code> 跑两次无害，"发邮件"不行：<strong>有副作用的 activity 必须带幂等键</strong></td></tr>
+  <tr><td>Temporal server</td><td>无</td><td>无状态重启，从 PG 读回一切</td></tr>
+  <tr><td>VM</td><td>环境重置</td><td>快照恢复；会话状态反正不在 VM</td></tr>
+  <tr><td>PG</td><td><strong>唯一真事故</strong></td><td>备份——整个系统唯一的命门</td></tr>
+</table>
+
+<hr class="soft">
+
+<div class="callout key"><span class="tag">收尾洞察</span>整个系统的容错设计，本质是把"怕丢的东西"收敛到尽量少的存储里——PG（执行进度）、Redis（业务状态）、VM 快照（环境）——然后让所有进程保持无状态。进程谁死都无所谓，存储只有三处需要认真对待。<strong>故障被设计成了日常。</strong></div>
+
+</main>
+</body>
+</html>
