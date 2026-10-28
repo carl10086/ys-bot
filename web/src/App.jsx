@@ -7,6 +7,7 @@ export default function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [status, setStatus] = useState('连接中…')
+  const [thinking, setThinking] = useState(false)
   const afterSeq = useRef(0)
   const bottomRef = useRef(null)
 
@@ -29,6 +30,7 @@ export default function App() {
     if (d.messages?.length) {
       afterSeq.current = d.messages[d.messages.length - 1].seq
       setMessages((prev) => [...prev, ...d.messages])
+      if (d.messages[d.messages.length - 1].kind === 'assistant') setThinking(false)
     }
   }
 
@@ -52,6 +54,7 @@ export default function App() {
     const text = input.trim()
     if (!text || !sessionId) return
     setInput('')
+    setThinking(true)
     // msg_id 客户端生成：重发/双击/重试都安全
     await fetch(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -88,6 +91,7 @@ export default function App() {
           </div>
         ))}
         <div ref={bottomRef} />
+        {thinking && <div style={{ color: '#999', fontSize: 13 }}>agent 思考中…（推理模型需 30–60 秒）</div>}
       </main>
       <footer style={{ display: 'flex', gap: 8 }}>
         <input
