@@ -1,0 +1,69 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// 假 OpenAI 兼容端点：回显最后一条 user 消息的文本。
+// 验证点：① 适配层把历史正确映射为 OpenAI messages ② 返回文本被正确读出。
+func TestAgent_Reply_MapsHistoryAndReturnsText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		lastUser := ""
+		for _, m := range req.Messages {
+			if m.Role != "user" {
+				continue
+			}
+			// content 可能是纯字符串或 [{"type":"text","text":...}] 分片
+			var s string
+			if json.Unmarshal(m.Content, &s) == nil {
+				lastUser = s
+				continue
+			}
+			var parts []struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(m.Content, &parts) == nil && len(parts) > 0 {
+				lastUser = parts[0].Text
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "test-model",
+			"choices": []map[string]any{{
+				"index": 0, "finish_reason": "stop",
+				"message": map[string]string{"role": "assistant", "content": "echo:" + lastUser},
+			}},
+			"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer srv.Close()
+
+	a, err := NewFantasy(Config{BaseURL: srv.URL, APIKey: "fake", Model: "test-model", System: "你是助手"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := a.Reply(context.Background(), []Message{
+		{Role: "user", Content: "第一条"},
+		{Role: "assistant", Content: "回复一"},
+		{Role: "user", Content: "最新问题"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "echo:最新问题" {
+		t.Fatalf("reply=%q, want echo:最新问题", reply)
+	}
+}
