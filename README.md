@@ -7,7 +7,26 @@ always-on agent 沙箱系统——按 Grok Bot 架构实现的个人项目：age
 - **架构基石：[`docs/architecture/server-vm-boundary.md`](docs/architecture/server-vm-boundary.md)（server/VM 职责边界，含例子走查）**
 - 数据模型（已定稿）：[`docs/architecture/data-model.md`](docs/architecture/data-model.md)
 - 分阶段计划：[`docs/architecture/phasing.md`](docs/architecture/phasing.md)（当前目标 = M1 主干）
-- 状态：**v1 设计中**，尚无代码
+- 状态：**M1 主干已跑通**（2026-10-28 五条冒烟验收全过，见文末清单）
+
+## 跑起来（M1）
+
+```bash
+cd deploy && docker compose up -d          # Temporal + PG + Redis
+cd web && npm install && npm run build     # 构建 SPA（go:embed 需要 dist/）
+cd .. && go run ./cmd/ys-server            # :8080，浏览器直接打开
+LLM_API_KEY=xxx go run ./cmd/ys-worker     # OpenAI 兼容端点；LLM_BASE_URL/LLM_MODEL 可选
+```
+
+## M1 冒烟验收清单（2026-10-28 全过）
+
+| # | 验收 | 结果 |
+|---|---|---|
+| 1 | 发消息 → LLM 回复出现在消息流 | ok（真 MiniMax-M2.5，回复带 turn_id） |
+| 2 | 同 msg_id 重发 → `deduped:true`，消息数不变 | ok |
+| 3 | turn 进行中发消息 → 旧 turn 取消、合并开新 turn | ok（"数数：1"被打断，最终回复响应了最新指令） |
+| 4 | kill -9 ys-worker → 重启 → turn 从断点恢复完成 | ok（Temporal durable，新 WorkerID 接管） |
+| 5 | ys-server 重启 → 历史完好 | ok（事实源在 PG） |
 
 ## 关键架构决策
 
