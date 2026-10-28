@@ -1,4 +1,4 @@
-package store
+package pg
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func newTestPG(t *testing.T) *PG {
 	if dsn == "" {
 		dsn = "postgres://ys:ys@localhost:5432/ys_sandbox"
 	}
-	db, err := NewPG(context.Background(), dsn)
+	db, err := New(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("PG 不可用（先 cd deploy && docker compose up -d）：%v", err)
 	}
