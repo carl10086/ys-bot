@@ -38,6 +38,7 @@ type Session struct {
 }
 
 type Message struct {
+	ID        uuid.UUID // uuidv7，应用生成
 	SessionID uuid.UUID
 	Seq       int64
 	Kind      string
@@ -92,10 +93,35 @@ func (p *PG) CreateSession(ctx context.Context, userID, title string) (Session, 
 	return Session{ID: s.ID, UserID: s.UserID, Title: s.Title, CreatedAt: s.CreatedAt.Time}, nil
 }
 
+// ErrNotFound 记录不存在（翻译 pgx.ErrNoRows，调用方不用 import pgx）。
+var ErrNotFound = errors.New("pg: not found")
+
+// GetSession 按 id 取会话（SPA 刷新后恢复展示用）。
+func (p *PG) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
+	s, err := p.q.GetSession(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, ErrNotFound
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{ID: s.ID, UserID: s.UserID, Title: s.Title, CreatedAt: s.CreatedAt.Time}, nil
+}
+
 // InsertMessage 幂等插入一条消息。
-// msg_id 冲突（客户端重发）→ inserted=false，返回已存在行的 seq（讲座 15 去重）。
-// seq 在同一会话内递增；事务 + advisory lock 防并发撞 PK。
+// msg_id 已存在（客户端重发）→ inserted=false，返回已存在行的 seq（讲座 15 去重）。
+// seq 由 sessions.last_seq 父行计数器发放：行锁串行化同会话插入，回滚不留空号。
+// 罕见竞态（两个并发同 msg_id 都过了预检）由 ON CONFLICT 兜底，会烧掉一个 seq——无害（after_seq 是 > 比较）。
 func (p *PG) InsertMessage(ctx context.Context, m Message) (seq int64, inserted bool, err error) {
+	if m.MsgID != nil {
+		// 去重预检：命中直接返回，不烧 seq
+		if seq, err := p.q.GetMessageSeqByMsgID(ctx, m.MsgID); err == nil {
+			return seq, false, nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, err
+		}
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return 0, false, err
@@ -103,18 +129,25 @@ func (p *PG) InsertMessage(ctx context.Context, m Message) (seq int64, inserted 
 	defer tx.Rollback(ctx)
 	q := p.q.WithTx(tx)
 
-	if err := q.LockSessionForSeq(ctx, m.SessionID.String()); err != nil {
+	seq, err = q.NextSeq(ctx, m.SessionID)
+	if err != nil {
 		return 0, false, err
 	}
-	seq, err = q.InsertMessageDedup(ctx, gen.InsertMessageDedupParams{
+	id, err := uuid.NewV7()
+	if err != nil {
+		return 0, false, fmt.Errorf("uuidv7: %w", err)
+	}
+	_, err = q.InsertMessage(ctx, gen.InsertMessageParams{
+		ID:        id,
 		SessionID: m.SessionID,
+		Seq:       seq,
 		Kind:      m.Kind,
 		Content:   m.Content,
 		MsgID:     m.MsgID,
 		TurnID:    pgtype.Text{String: m.TurnID, Valid: m.TurnID != ""},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		// msg_id 冲突：回查已存在行的 seq
+		// 并发同 msg_id：ON CONFLICT 不返行，回查胜者的 seq
 		if m.MsgID == nil {
 			return 0, false, errors.New("no row inserted but msg_id is nil")
 		}

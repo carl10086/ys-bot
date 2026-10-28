@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -35,6 +36,7 @@ type Server struct {
 func New(p *pg.PG, r *redis.Redis, s TurnStarter, userID string) *Server {
 	srv := &Server{pg: p, redis: r, starter: s, userID: userID, mux: http.NewServeMux()}
 	srv.mux.HandleFunc("POST /api/sessions", srv.createSession)
+	srv.mux.HandleFunc("GET /api/sessions/{id}", srv.getSession)
 	srv.mux.HandleFunc("POST /api/sessions/{id}/messages", srv.sendMessage)
 	srv.mux.HandleFunc("GET /api/sessions/{id}/messages", srv.listMessages)
 	srv.mux.HandleFunc("GET /api/sessions/{id}/events", srv.events)
@@ -49,13 +51,47 @@ func (s *Server) WithStatic(fsys fs.FS) *Server {
 	return s
 }
 
+type createSessionRequest struct {
+	UserID string `json:"user_id"` // 空则用 server 默认值
+	Title  string `json:"title"`
+}
+
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.pg.CreateSession(r.Context(), s.userID, "")
+	var req createSessionRequest
+	// 容忍空 body（裸 curl -X POST）：EOF 不算错误
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	userID := req.UserID
+	if userID == "" {
+		userID = s.userID
+	}
+	sess, err := s.pg.CreateSession(r.Context(), userID, req.Title)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"id": sess.ID.String()})
+	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+}
+
+// getSession SPA 刷新后恢复展示（title/user_id），也用于校验 localStorage 里的 id 是否还有效。
+func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
+	sid, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+		return
+	}
+	sess, err := s.pg.GetSession(r.Context(), sid)
+	if errors.Is(err, pg.ErrNotFound) {
+		writeErr(w, fmt.Errorf("session not found"), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
 }
 
 type sendRequest struct {

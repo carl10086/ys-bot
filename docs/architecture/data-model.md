@@ -1,8 +1,17 @@
 # 数据模型（v1 定稿）
 
-> 状态：**2026-10-28 经用户确认定稿**。
+> 状态：**2026-10-28 经用户确认定稿**；同日二次确认修订：新增"统一建表约定"（user_id 全表冗余、单列代理 PK、父行计数器发号）。
 > 依据：CS146S 讲座全档 `docs/reference/cs146s-grokbot-lecture.html`（引用一律用讲座序 01–37；sNN 文件号仅溯源）。
 > 总原则：**事实源只写 PG 和文件存储；Redis 只放可丢的协调态；Temporal PG 是执行账本，应用不查。**
+
+## 统一建表约定（2026-10-28 二次确认）
+
+所有业务表按同一套规矩建，M2 的 sandboxes 及以后新表照此执行：
+
+1. **`id` 单列代理主键**：uuidv7，应用生成（与 msg_id / turn_id 同族）。不用复合自然键当 PK。
+2. **`user_id text` 全表冗余**：无 FK。收益：按用户直查免 JOIN、将来开 PG RLS 策略要求每行自带租户列。子表 user_id **从父行派生**（INSERT 时 SQL 内 SELECT 父表），不靠应用传参，防不一致。依据：e2b 每张业务表都带 team_id。
+3. **每组编号用父行计数器**：如 `sessions.last_seq`，`UPDATE … RETURNING` 同事务发放。依据：PG 社区对 per-group 编号的标准方案（sequence 给不了每组编号且回滚留洞；MAX+1 并发报废）。行锁天然串行化同组插入，回滚不留空号，删行不复用号。e2b 的 `envs.spawn_count` 即此模式。
+4. **业务唯一性走 UNIQUE 约束**：如 messages 的 `(session_id, seq)`、`(msg_id)`。
 
 ## 四类存储的角色
 
@@ -17,20 +26,23 @@
 
 ```
 Session
-  id uuid PK            -- uuidv7，server 生成
+  id uuid PK            -- uuidv7，应用生成
   user_id text          -- 用户维度（无 FK，见"用户维度决策"）
-  title text
+  title text            -- 易读名称，SPA 可设
+  last_seq bigint       -- 父行计数器：会话内 seq 发号器（统一约定 §3）
   created_at timestamptz
 
 Message
-  session_id uuid       -- 逻辑归属 Session（PK 的一部分）
-  seq bigint            -- 会话内递增，对应讲座 15 Ordering
+  id uuid PK            -- uuidv7，应用生成（统一约定 §1）
+  session_id uuid       -- FK → Session
+  seq bigint            -- 会话内递增（父行计数器发放），对应讲座 15 Ordering
+  user_id text          -- 冗余自 sessions.user_id（统一约定 §2）
   kind text             -- user / assistant / tool_call / tool_result
   content jsonb
   msg_id uuid UNIQUE    -- 仅用户消息有；客户端生成，幂等兜底
-  turn_id text          -- = Temporal workflowID（turn:{sessionId}:{uuid}）
+  turn_id text          -- = Temporal workflowID；仅 assistant 消息有
   created_at timestamptz
-  PK = (session_id, seq)
+  UNIQUE (session_id, seq)
 
 Sandbox
   id uuid PK
@@ -50,7 +62,7 @@ Sandbox
 - `sessions`、`sandboxes` 各加 `user_id` 列；**不建 users 表、不加 FK 约束**。
 - v1 默认用户 = 配置常量 `local`（intent：第一个且唯一的用户）。**类型用 `text` 不用 `uuid`**：值是常量字符串不是 uuid，强用 uuid 类型反而要塞假值（2026-10-28 用户指出过度设计，已修）。
 - 为什么列要现在占住：讲座的基本单位是 user（09 "one VM per user"、08 "understanding of the user"、30 记忆按用户分层）。现在加是两列的成本，以后补是迁移手术。
-- `messages` 不直接带 user_id，经 session 继承。
+- `messages` 冗余 `user_id`，从 sessions 父行派生（2026-10-28 二次确认修订：原决策"经 session 继承不冗余"作废——e2b 全表带 team_id，且 PG RLS 要求每行自带租户列）。
 
 ## Redis 三个结构（全是协调态）
 
@@ -118,3 +130,4 @@ SPA       → ys-server : GET /messages?after_seq=N，按 seq 顺序应用
 - `messages.source` 唤醒来源字段（讲座 10 "每次唤醒记录来源"；v1 只有 web 一个来源，建了是空列）
 - routines 表 / 文件的实际调度
 - 多用户：users 表 + FK
+- LoadHistory 的全量读：每个 turn 都读会话全部消息发给 LLM，会话长了是已知 growth 点——M5 memory 压缩时一并解决，届时这行从停车场划掉

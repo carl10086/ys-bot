@@ -25,11 +25,18 @@ type CreateSessionParams struct {
 	Title  string
 }
 
+type CreateSessionRow struct {
+	ID        uuid.UUID
+	UserID    string
+	Title     string
+	CreatedAt pgtype.Timestamptz
+}
+
 // sqlc 查询定义（生成的 Go 代码在 ./gen，不手改）。
-// 关键正确性逻辑都在这里：msg_id 去重、会话内 seq 递增。
-func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
+// 关键正确性逻辑都在这里：msg_id 去重、父行计数器发号。
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (CreateSessionRow, error) {
 	row := q.db.QueryRow(ctx, createSession, arg.ID, arg.UserID, arg.Title)
-	var i Session
+	var i CreateSessionRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -50,25 +57,53 @@ func (q *Queries) GetMessageSeqByMsgID(ctx context.Context, msgID *uuid.UUID) (i
 	return seq, err
 }
 
-const insertMessageDedup = `-- name: InsertMessageDedup :one
-INSERT INTO messages (session_id, seq, kind, content, msg_id, turn_id)
-VALUES ($1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id = $1), $2, $3, $4, $5)
+const getSession = `-- name: GetSession :one
+SELECT id, user_id, title, created_at FROM sessions WHERE id = $1
+`
+
+type GetSessionRow struct {
+	ID        uuid.UUID
+	UserID    string
+	Title     string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (GetSessionRow, error) {
+	row := q.db.QueryRow(ctx, getSession, id)
+	var i GetSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertMessage = `-- name: InsertMessage :one
+INSERT INTO messages (id, session_id, seq, user_id, kind, content, msg_id, turn_id)
+VALUES ($1, $2, $3, (SELECT user_id FROM sessions WHERE id = $2), $4, $5, $6, $7)
 ON CONFLICT (msg_id) DO NOTHING
 RETURNING seq
 `
 
-type InsertMessageDedupParams struct {
+type InsertMessageParams struct {
+	ID        uuid.UUID
 	SessionID uuid.UUID
+	Seq       int64
 	Kind      string
 	Content   []byte
 	MsgID     *uuid.UUID
 	TurnID    pgtype.Text
 }
 
-// msg_id 冲突（客户端重发）→ DO NOTHING 不返行，调用方识别为重复。
-func (q *Queries) InsertMessageDedup(ctx context.Context, arg InsertMessageDedupParams) (int64, error) {
-	row := q.db.QueryRow(ctx, insertMessageDedup,
+// user_id 从 sessions 父行派生（单一事实源，不靠应用传）。
+// msg_id 冲突（客户端重发/并发竞态）→ DO NOTHING 不返行，调用方识别为重复。
+func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertMessage,
+		arg.ID,
 		arg.SessionID,
+		arg.Seq,
 		arg.Kind,
 		arg.Content,
 		arg.MsgID,
@@ -91,15 +126,25 @@ type ListMessagesAfterParams struct {
 	Seq       int64
 }
 
-func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterParams) ([]Message, error) {
+type ListMessagesAfterRow struct {
+	SessionID uuid.UUID
+	Seq       int64
+	Kind      string
+	Content   []byte
+	MsgID     *uuid.UUID
+	TurnID    pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterParams) ([]ListMessagesAfterRow, error) {
 	rows, err := q.db.Query(ctx, listMessagesAfter, arg.SessionID, arg.Seq)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Message
+	var items []ListMessagesAfterRow
 	for rows.Next() {
-		var i Message
+		var i ListMessagesAfterRow
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.Seq,
@@ -119,12 +164,15 @@ func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterPa
 	return items, nil
 }
 
-const lockSessionForSeq = `-- name: LockSessionForSeq :exec
-SELECT pg_advisory_xact_lock(hashtext($1::text))
+const nextSeq = `-- name: NextSeq :one
+UPDATE sessions SET last_seq = last_seq + 1 WHERE id = $1
+RETURNING last_seq
 `
 
-// 会话级 advisory xact lock：防并发插入时 seq 撞 PK。
-func (q *Queries) LockSessionForSeq(ctx context.Context, dollar_1 string) error {
-	_, err := q.db.Exec(ctx, lockSessionForSeq, dollar_1)
-	return err
+// 父行计数器发号：行锁串行化同会话插入，事务回滚不留空号。
+func (q *Queries) NextSeq(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, nextSeq, id)
+	var last_seq int64
+	err := row.Scan(&last_seq)
+	return last_seq, err
 }

@@ -30,10 +30,11 @@ func main() {
 		log.Fatalf("redis: %v", err)
 	}
 	ag, err := agent.NewFantasy(agent.Config{
-		BaseURL: envOr("LLM_BASE_URL", "https://api.openai.com/v1"),
-		APIKey:  os.Getenv("LLM_API_KEY"),
-		Model:   envOr("LLM_MODEL", "gpt-4o-mini"),
-		System:  envOr("LLM_SYSTEM", "You are a helpful assistant."),
+		Provider: envOr("LLM_PROVIDER", "openai"),
+		BaseURL:  envOr("LLM_BASE_URL", "https://api.openai.com/v1"),
+		APIKey:   os.Getenv("LLM_API_KEY"),
+		Model:    envOr("LLM_MODEL", "gpt-4o-mini"),
+		System:   envOr("LLM_SYSTEM", "You are a helpful assistant."),
 	})
 	if err != nil {
 		log.Fatalf("agent: %v", err)

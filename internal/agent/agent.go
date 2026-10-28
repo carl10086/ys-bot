@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/openaicompat"
 )
 
@@ -23,10 +24,11 @@ type Agent interface {
 }
 
 type Config struct {
-	BaseURL string // OpenAI 兼容端点（自建网关/官方均可）
-	APIKey  string
-	Model   string
-	System  string // 系统提示词
+	Provider string // "openai"（默认，OpenAI 兼容）/ "anthropic"
+	BaseURL  string // 兼容端点（自建网关/官方均可）
+	APIKey   string
+	Model    string
+	System   string // 系统提示词
 }
 
 type fantasyAgent struct {
@@ -35,12 +37,21 @@ type fantasyAgent struct {
 }
 
 func NewFantasy(cfg Config) (Agent, error) {
-	provider, err := openaicompat.New(
-		openaicompat.WithBaseURL(cfg.BaseURL),
-		openaicompat.WithAPIKey(cfg.APIKey),
-	)
+	var provider fantasy.Provider
+	var err error
+	if cfg.Provider == "anthropic" {
+		provider, err = anthropic.New(
+			anthropic.WithBaseURL(cfg.BaseURL),
+			anthropic.WithAPIKey(cfg.APIKey),
+		)
+	} else {
+		provider, err = openaicompat.New(
+			openaicompat.WithBaseURL(cfg.BaseURL),
+			openaicompat.WithAPIKey(cfg.APIKey),
+		)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("openai-compat provider: %w", err)
+		return nil, fmt.Errorf("%s provider: %w", cfg.Provider, err)
 	}
 	model, err := provider.LanguageModel(context.Background(), cfg.Model)
 	if err != nil {

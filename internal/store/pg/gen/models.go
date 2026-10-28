@@ -10,8 +10,10 @@ import (
 )
 
 type Message struct {
+	ID        uuid.UUID
 	SessionID uuid.UUID
 	Seq       int64
+	UserID    string
 	Kind      string
 	Content   []byte
 	MsgID     *uuid.UUID
@@ -23,5 +25,6 @@ type Session struct {
 	ID        uuid.UUID
 	UserID    string
 	Title     string
+	LastSeq   int64
 	CreatedAt pgtype.Timestamptz
 }

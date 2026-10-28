@@ -95,3 +95,58 @@ func TestPG_CreateSession_Defaults(t *testing.T) {
 		t.Fatalf("session id must be uuidv7, got version %d", s.ID.Version())
 	}
 }
+
+// 竞态兜底路径（pg.go InsertMessage 的 ON CONFLICT 分支）：
+// N 个 goroutine 同 msg_id 并发插入，预检全部 miss，靠唯一约束只插一行。
+// 期望：恰好一个 inserted=true；全部拿到同一个 seq；messages 只有一行。
+// 败者烧掉的 seq 会在会话里留空号——无害（after_seq 是 > 比较），不断言 last_seq。
+func TestPG_InsertMessage_ConcurrentSameMsgID(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	s := mustCreateSession(t, db, "local")
+
+	msgID := mustParseUUID(t, "018f3c2a-0000-7000-8000-000000000099")
+	const n = 8
+	type result struct {
+		seq      int64
+		inserted bool
+		err      error
+	}
+	results := make(chan result, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			seq, inserted, err := db.InsertMessage(ctx, Message{
+				SessionID: s.ID, Kind: KindUser, Content: []byte(`{"text":"race"}`), MsgID: &msgID,
+			})
+			results <- result{seq, inserted, err}
+		}()
+	}
+
+	var seqs []int64
+	insertedCount := 0
+	for i := 0; i < n; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("concurrent insert err: %v", r.err)
+		}
+		if r.inserted {
+			insertedCount++
+		}
+		seqs = append(seqs, r.seq)
+	}
+	if insertedCount != 1 {
+		t.Fatalf("want exactly 1 inserted, got %d (seqs=%v)", insertedCount, seqs)
+	}
+	for _, seq := range seqs[1:] {
+		if seq != seqs[0] {
+			t.Fatalf("all callers must get the winner's seq: %v", seqs)
+		}
+	}
+	msgs, err := db.ListMessages(ctx, s.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 message, got %d", len(msgs))
+	}
+}
