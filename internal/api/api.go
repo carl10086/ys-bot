@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -162,6 +163,21 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"id": sid.String()})
 }
 
+// autoTitle 首条消息自动命名：仅在标题仍为空时生效（显式标题/手动 rename 不被覆盖）。
+// 失败只记日志级忽略——命名是锦上添花，不能影响发消息主链路。
+func (s *Server) autoTitle(ctx context.Context, sid uuid.UUID, text string) {
+	sess, err := s.pg.GetSession(ctx, sid)
+	if err != nil || sess.Title != "" {
+		return
+	}
+	runes := []rune(strings.TrimSpace(text))
+	title := string(runes)
+	if len(runes) > 30 {
+		title = string(runes[:30]) + "…"
+	}
+	_, _ = s.pg.RenameSession(ctx, sid, title)
+}
+
 type sendRequest struct {
 	MsgID string `json:"msg_id"`
 	Text  string `json:"text"`
@@ -199,6 +215,11 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		// 客户端重发：直接返回已存在的 seq，不再入队/触发（讲座 15 去重）
 		writeJSON(w, map[string]any{"seq": seq, "deduped": true})
 		return
+	}
+
+	// 首条消息自动命名：会话还没标题时取消息开头当标题（ChatGPT 同款，可再手动 rename）
+	if seq == 1 {
+		s.autoTitle(ctx, sid, req.Text)
 	}
 
 	if err := s.redis.PushMessage(ctx, redis.Queue{SessionID: sid.String()}, strconv.FormatInt(seq, 10)); err != nil {

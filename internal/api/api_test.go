@@ -213,6 +213,71 @@ func TestAPI_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
 	}
 }
 
+func TestAPI_FirstMessageAutoTitlesSession(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	sid := mustCreateSessionViaAPI(t, srv)
+
+	postJSON(t, srv, "/api/sessions/"+sid+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"帮我查一下北京明天的天气怎么样"}`)
+	if got := getSessionTitle(t, srv, sid); got != "帮我查一下北京明天的天气怎么样" {
+		t.Fatalf("title=%q, want 首条消息原文", got)
+	}
+
+	// 第二条消息不再改标题
+	postJSON(t, srv, "/api/sessions/"+sid+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"算了不用了"}`)
+	if got := getSessionTitle(t, srv, sid); got != "帮我查一下北京明天的天气怎么样" {
+		t.Fatalf("title=%q, want 不被第二条消息覆盖", got)
+	}
+}
+
+func TestAPI_FirstMessageAutoTitles_LongTextTruncated(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	sid := mustCreateSessionViaAPI(t, srv)
+
+	long := strings.Repeat("字", 50)
+	postJSON(t, srv, "/api/sessions/"+sid+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"`+long+`"}`)
+	got := getSessionTitle(t, srv, sid)
+	if n := len([]rune(got)); n > 31 { // 30 字 + 省略号
+		t.Fatalf("title len=%d runes, want ≤31", n)
+	}
+}
+
+func TestAPI_ExplicitTitleNotOverridden(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(`{"title":"手工起的名"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+
+	postJSON(t, srv, "/api/sessions/"+created.ID+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"hi"}`)
+	if got := getSessionTitle(t, srv, created.ID); got != "手工起的名" {
+		t.Fatalf("title=%q, want 显式标题不被覆盖", got)
+	}
+}
+
+func getSessionTitle(t *testing.T, srv *httptest.Server, sid string) string {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/api/sessions/" + sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Title
+}
+
 func getSessions(t *testing.T, srv *httptest.Server, userID string) []struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
