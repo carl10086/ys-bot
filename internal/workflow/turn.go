@@ -35,9 +35,11 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 	ctx = workflow.WithActivityOptions(ctx, ao)
 	logger := workflow.GetLogger(ctx)
 
+	turnID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	defer func() {
 		dctx, _ := workflow.NewDisconnectedContext(ctx)
-		_ = workflow.ExecuteActivity(dctx, "ReleaseTurn", in.SessionID).Get(dctx, nil)
+		// 条件释放：锁可能已被打断者抢走，只放自己的
+		_ = workflow.ExecuteActivity(dctx, "ReleaseTurn", in.SessionID, turnID).Get(dctx, nil)
 	}()
 
 	var batch []int64
@@ -59,7 +61,6 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		return fmt.Errorf("call llm: %w", err)
 	}
 
-	turnID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	var seq int64
 	err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
 		SessionID: in.SessionID,

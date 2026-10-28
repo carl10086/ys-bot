@@ -83,8 +83,8 @@ func (a *Activities) PublishChanged(ctx context.Context, sessionID string) error
 	return a.Redis.PublishChanged(ctx, sessionID)
 }
 
-func (a *Activities) ReleaseTurn(ctx context.Context, sessionID string) error {
-	return a.Redis.ReleaseTurn(ctx, sessionID)
+func (a *Activities) ReleaseTurn(ctx context.Context, sessionID, workflowID string) error {
+	return a.Redis.ReleaseTurn(ctx, sessionID, workflowID)
 }
 
 // content jsonb 当前只有一种形状 {"text": "..."}；解析失败时原样返回。

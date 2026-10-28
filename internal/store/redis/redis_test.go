@@ -56,7 +56,14 @@ func TestRedis_TurnLockMutualExclusion(t *testing.T) {
 		t.Fatalf("holder=%q err=%v, want wf-1", holder, err)
 	}
 
-	if err := r.ReleaseTurn(ctx, "s1"); err != nil {
+	// 持有者不符时不得释放（防打断竞态删掉新 turn 的锁）
+	if err := r.ReleaseTurn(ctx, "s1", "wf-other"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := r.TryAcquireTurn(ctx, "s1", "wf-3"); ok {
+		t.Fatal("release with wrong holder must keep the lock")
+	}
+	if err := r.ReleaseTurn(ctx, "s1", "wf-1"); err != nil {
 		t.Fatal(err)
 	}
 	ok, err = r.TryAcquireTurn(ctx, "s1", "wf-2")

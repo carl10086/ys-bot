@@ -29,7 +29,7 @@ func TestTurnWorkflow_HappyPath(t *testing.T) {
 		Run(func(args mock.Arguments) { written = args.Get(1).(WriteMessageInput) }).
 		Return(int64(3), nil)
 	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
-	env.OnActivity("ReleaseTurn", mock.Anything, "s1").Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
 
@@ -58,7 +58,7 @@ func TestTurnWorkflow_EmptyBatchSkipsLLM(t *testing.T) {
 	env.RegisterActivity(&Activities{}) // 只注册名字；真实调用被 OnActivity mock 拦截
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{}, nil)
-	env.OnActivity("ReleaseTurn", mock.Anything, "s1").Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 	// LoadHistory / CallLLM / WriteMessage 未注册 mock，被调用即测试失败
 
 	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
@@ -76,7 +76,7 @@ func TestTurnWorkflow_LLMErrorStillReleasesLock(t *testing.T) {
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return("", errors.New("llm down"))
-	env.OnActivity("ReleaseTurn", mock.Anything, "s1").Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
 	if err := env.GetWorkflowError(); err == nil {

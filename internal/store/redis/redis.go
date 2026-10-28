@@ -68,8 +68,17 @@ func (r *Redis) TurnHolder(ctx context.Context, sessionID string) (string, error
 	return v, err
 }
 
-func (r *Redis) ReleaseTurn(ctx context.Context, sessionID string) error {
-	return r.client.Del(ctx, turnKey(sessionID)).Err()
+// releaseTurnScript 条件删除：只有锁仍归 expectedWorkflowID 时才删。
+// 防打断竞态——旧 turn 被 Cancel 后的延迟 ReleaseTurn 不得删掉新 turn 的锁。
+var releaseTurnScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+else
+	return 0
+end`)
+
+func (r *Redis) ReleaseTurn(ctx context.Context, sessionID, expectedWorkflowID string) error {
+	return releaseTurnScript.Run(ctx, r.client, []string{turnKey(sessionID)}, expectedWorkflowID).Err()
 }
 
 // PublishChanged 发"something changed"空信号（讲座 15 Watching：丢了无害）。
@@ -99,4 +108,9 @@ func (r *Redis) SubscribeChanged(ctx context.Context, sessionID string) (<-chan 
 		}
 	}()
 	return ch, func() { sub.Close() }
+}
+
+// ForceSetTurn 强制占锁：打断路径用——旧 turn 已 Cancel，锁直接改写为新 workflowID。
+func (r *Redis) ForceSetTurn(ctx context.Context, sessionID, workflowID string) error {
+	return r.client.Set(ctx, turnKey(sessionID), workflowID, turnLockTTL).Err()
 }
