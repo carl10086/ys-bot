@@ -1,0 +1,44 @@
+# M1 依赖：Temporal + PostgreSQL + Redis（均不自建，本地/服务器通用）
+# Temporal 与业务共用同一个 PG 实例、不同 database（temporal 自管 temporal/temporal_visibility，
+# 业务用 ys_sandbox）——概念上"Temporal PG 是执行账本，应用不查"（docs/architecture/data-model.md）。
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ys
+      POSTGRES_PASSWORD: ys
+      POSTGRES_DB: ys_sandbox
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ys"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12_pgx
+      DB_PORT: "5432"
+      POSTGRES_USER: ys
+      POSTGRES_PWD: ys
+      POSTGRES_SEEDS: postgres
+    ports:
+      - "7233:7233"  # gRPC frontend
+      - "8233:8233"  # Web UI
+
+volumes:
+  pgdata:
