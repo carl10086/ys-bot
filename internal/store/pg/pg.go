@@ -96,6 +96,57 @@ func (p *PG) CreateSession(ctx context.Context, userID, title string) (Session, 
 // ErrNotFound 记录不存在（翻译 pgx.ErrNoRows，调用方不用 import pgx）。
 var ErrNotFound = errors.New("pg: not found")
 
+// SessionSummary 会话列表项：会话本身 + 最近活跃时间（列表排序键）。
+type SessionSummary struct {
+	Session
+	LastActiveAt time.Time
+}
+
+// ListSessions 按 user 列会话，最近活跃倒序（SPA 会话列表）。
+func (p *PG) ListSessions(ctx context.Context, userID string) ([]SessionSummary, error) {
+	rows, err := p.q.ListSessionsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SessionSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, SessionSummary{
+			Session:      Session{ID: r.ID, UserID: r.UserID, Title: r.Title, CreatedAt: r.CreatedAt.Time},
+			LastActiveAt: r.LastActiveAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// RenameSession 改会话标题（SPA rename）。
+func (p *PG) RenameSession(ctx context.Context, id uuid.UUID, title string) (Session, error) {
+	s, err := p.q.UpdateSessionTitle(ctx, gen.UpdateSessionTitleParams{ID: id, Title: title})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, ErrNotFound
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{ID: s.ID, UserID: s.UserID, Title: s.Title, CreatedAt: s.CreatedAt.Time}, nil
+}
+
+// DeleteSession 删会话及其全部消息（messages 有 FK，必须先清；一个事务保证不同时失败）。
+func (p *PG) DeleteSession(ctx context.Context, id uuid.UUID) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := p.q.WithTx(tx)
+	if err := q.DeleteSessionMessages(ctx, id); err != nil {
+		return err
+	}
+	if err := q.DeleteSession(ctx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // GetSession 按 id 取会话（SPA 刷新后恢复展示用）。
 func (p *PG) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
 	s, err := p.q.GetSession(ctx, id)

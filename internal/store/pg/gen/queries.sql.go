@@ -46,6 +46,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (C
 	return i, err
 }
 
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE id = $1
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSession, id)
+	return err
+}
+
+const deleteSessionMessages = `-- name: DeleteSessionMessages :exec
+DELETE FROM messages WHERE session_id = $1
+`
+
+func (q *Queries) DeleteSessionMessages(ctx context.Context, sessionID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSessionMessages, sessionID)
+	return err
+}
+
 const getMessageSeqByMsgID = `-- name: GetMessageSeqByMsgID :one
 SELECT seq FROM messages WHERE msg_id = $1
 `
@@ -164,6 +182,51 @@ func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterPa
 	return items, nil
 }
 
+const listSessionsByUser = `-- name: ListSessionsByUser :many
+SELECT s.id, s.user_id, s.title, s.created_at,
+       COALESCE(MAX(m.created_at), s.created_at) AS last_active_at
+FROM sessions s
+LEFT JOIN messages m ON m.session_id = s.id
+WHERE s.user_id = $1
+GROUP BY s.id
+ORDER BY last_active_at DESC
+`
+
+type ListSessionsByUserRow struct {
+	ID           uuid.UUID
+	UserID       string
+	Title        string
+	CreatedAt    pgtype.Timestamptz
+	LastActiveAt pgtype.Timestamptz
+}
+
+// SPA 会话列表：最近活跃倒序（有消息按最后一条消息时间，无消息按创建时间）。
+func (q *Queries) ListSessionsByUser(ctx context.Context, userID string) ([]ListSessionsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listSessionsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionsByUserRow
+	for rows.Next() {
+		var i ListSessionsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Title,
+			&i.CreatedAt,
+			&i.LastActiveAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextSeq = `-- name: NextSeq :one
 UPDATE sessions SET last_seq = last_seq + 1 WHERE id = $1
 RETURNING last_seq
@@ -175,4 +238,33 @@ func (q *Queries) NextSeq(ctx context.Context, id uuid.UUID) (int64, error) {
 	var last_seq int64
 	err := row.Scan(&last_seq)
 	return last_seq, err
+}
+
+const updateSessionTitle = `-- name: UpdateSessionTitle :one
+UPDATE sessions SET title = $2 WHERE id = $1
+RETURNING id, user_id, title, created_at
+`
+
+type UpdateSessionTitleParams struct {
+	ID    uuid.UUID
+	Title string
+}
+
+type UpdateSessionTitleRow struct {
+	ID        uuid.UUID
+	UserID    string
+	Title     string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitleParams) (UpdateSessionTitleRow, error) {
+	row := q.db.QueryRow(ctx, updateSessionTitle, arg.ID, arg.Title)
+	var i UpdateSessionTitleRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.CreatedAt,
+	)
+	return i, err
 }

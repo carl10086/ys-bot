@@ -140,6 +140,118 @@ func TestAPI_Events_SSEEmptySignal(t *testing.T) {
 	}
 }
 
+func TestAPI_ListSessions_OrderedByRecentActivity(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	s1 := mustCreateSessionViaAPI(t, srv)
+	s2 := mustCreateSessionViaAPI(t, srv)
+
+	// 初始：s2 后建，排前
+	list := getSessions(t, srv, "local")
+	if len(list) != 2 || list[0].ID != s2 || list[1].ID != s1 {
+		t.Fatalf("initial order: %+v, want [%s %s]", list, s2, s1)
+	}
+
+	// s1 发了消息 → s1 变最近活跃，排前
+	postJSON(t, srv, "/api/sessions/"+s1+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"hello"}`)
+	list = getSessions(t, srv, "local")
+	if len(list) != 2 || list[0].ID != s1 || list[1].ID != s2 {
+		t.Fatalf("after activity: %+v, want [%s %s]", list, s1, s2)
+	}
+
+	// 别的 user 的会话不出现
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(`{"user_id":"other"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	list = getSessions(t, srv, "local")
+	if len(list) != 2 {
+		t.Fatalf("want 2 sessions for user local, got %d", len(list))
+	}
+}
+
+func TestAPI_RenameSession(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	sid := mustCreateSessionViaAPI(t, srv)
+
+	patchJSON(t, srv, "/api/sessions/"+sid, `{"title":"改名了"}`)
+	list := getSessions(t, srv, "local")
+	if len(list) != 1 || list[0].Title != "改名了" {
+		t.Fatalf("want renamed title, got %+v", list)
+	}
+}
+
+func TestAPI_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
+	srv, _, _, cleanup := newTestServer(t)
+	defer cleanup()
+	sid := mustCreateSessionViaAPI(t, srv)
+	postJSON(t, srv, "/api/sessions/"+sid+"/messages", `{"msg_id":"`+uuid.NewString()+`","text":"bye"}`)
+
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/sessions/"+sid, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("DELETE → %d", resp.StatusCode)
+	}
+
+	// 会话 404、消息清空
+	resp2, err := http.Get(srv.URL + "/api/sessions/" + sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != 404 {
+		t.Fatalf("GET deleted session → %d, want 404", resp2.StatusCode)
+	}
+	if msgs := getMessages(t, srv, sid, 0); len(msgs) != 0 {
+		t.Fatalf("want 0 messages after delete, got %d", len(msgs))
+	}
+}
+
+func getSessions(t *testing.T, srv *httptest.Server, userID string) []struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+} {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/api/sessions?user_id=" + userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /api/sessions → %d", resp.StatusCode)
+	}
+	var out struct {
+		Sessions []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Sessions
+}
+
+func patchJSON(t *testing.T, srv *httptest.Server, path, body string) {
+	t.Helper()
+	req, _ := http.NewRequest("PATCH", srv.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("PATCH %s → %d", path, resp.StatusCode)
+	}
+}
+
 func mustCreateSessionViaAPI(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(`{}`))

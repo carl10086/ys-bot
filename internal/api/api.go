@@ -36,7 +36,10 @@ type Server struct {
 func New(p *pg.PG, r *redis.Redis, s TurnStarter, userID string) *Server {
 	srv := &Server{pg: p, redis: r, starter: s, userID: userID, mux: http.NewServeMux()}
 	srv.mux.HandleFunc("POST /api/sessions", srv.createSession)
+	srv.mux.HandleFunc("GET /api/sessions", srv.listSessions)
 	srv.mux.HandleFunc("GET /api/sessions/{id}", srv.getSession)
+	srv.mux.HandleFunc("PATCH /api/sessions/{id}", srv.renameSession)
+	srv.mux.HandleFunc("DELETE /api/sessions/{id}", srv.deleteSession)
 	srv.mux.HandleFunc("POST /api/sessions/{id}/messages", srv.sendMessage)
 	srv.mux.HandleFunc("GET /api/sessions/{id}/messages", srv.listMessages)
 	srv.mux.HandleFunc("GET /api/sessions/{id}/events", srv.events)
@@ -92,6 +95,71 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+}
+
+// listSessions SPA 侧栏会话列表：?user_id= 缺省用 server 默认用户；最近活跃倒序。
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = s.userID
+	}
+	rows, err := s.pg.ListSessions(r.Context(), userID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	type sessDTO struct {
+		ID     string `json:"id"`
+		UserID string `json:"user_id"`
+		Title  string `json:"title"`
+	}
+	out := make([]sessDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, sessDTO{ID: row.ID.String(), UserID: row.UserID, Title: row.Title})
+	}
+	writeJSON(w, map[string]any{"sessions": out})
+}
+
+type renameRequest struct {
+	Title string `json:"title"`
+}
+
+// renameSession SPA 手动改名（也供首条消息自动命名复用 store 层）。
+func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) {
+	sid, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+		return
+	}
+	var req renameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	sess, err := s.pg.RenameSession(r.Context(), sid, req.Title)
+	if errors.Is(err, pg.ErrNotFound) {
+		writeErr(w, fmt.Errorf("session not found"), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+}
+
+// deleteSession 删会话连同消息历史（SPA 侧栏删除）。
+func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
+	sid, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+		return
+	}
+	if err := s.pg.DeleteSession(r.Context(), sid); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": sid.String()})
 }
 
 type sendRequest struct {

@@ -9,6 +9,26 @@ RETURNING id, user_id, title, created_at;
 -- name: GetSession :one
 SELECT id, user_id, title, created_at FROM sessions WHERE id = $1;
 
+-- name: ListSessionsByUser :many
+-- SPA 会话列表：最近活跃倒序（有消息按最后一条消息时间，无消息按创建时间）。
+SELECT s.id, s.user_id, s.title, s.created_at,
+       COALESCE(MAX(m.created_at), s.created_at) AS last_active_at
+FROM sessions s
+LEFT JOIN messages m ON m.session_id = s.id
+WHERE s.user_id = $1
+GROUP BY s.id
+ORDER BY last_active_at DESC;
+
+-- name: UpdateSessionTitle :one
+UPDATE sessions SET title = $2 WHERE id = $1
+RETURNING id, user_id, title, created_at;
+
+-- name: DeleteSessionMessages :exec
+DELETE FROM messages WHERE session_id = $1;
+
+-- name: DeleteSession :exec
+DELETE FROM sessions WHERE id = $1;
+
 -- name: NextSeq :one
 -- 父行计数器发号：行锁串行化同会话插入，事务回滚不留空号。
 UPDATE sessions SET last_seq = last_seq + 1 WHERE id = $1
