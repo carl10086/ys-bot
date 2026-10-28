@@ -42,7 +42,11 @@ export default function App() {
     return () => es.close()
   }, [sessionId])
 
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages])
+  useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
 
   const send = async () => {
     const text = input.trim()
