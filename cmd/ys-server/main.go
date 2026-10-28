@@ -17,6 +17,7 @@ import (
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
 	"ys-sandbox/internal/workflow"
+	"ys-sandbox/web"
 )
 
 func main() {
@@ -40,7 +41,9 @@ func main() {
 	}
 	defer tc.Close()
 
-	handler := api.New(pgStore, rdb, workflow.TemporalStarter{Client: tc}, envOr("YS_USER_ID", "local")).Handler()
+	handler := api.New(pgStore, rdb, workflow.TemporalStarter{Client: tc}, envOr("YS_USER_ID", "local")).
+		WithStatic(web.Dist()).
+		Handler()
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("ys-server listening", "addr", addr)

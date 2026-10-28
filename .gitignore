@@ -1,4 +1,5 @@
 .env
 bin/
 node_modules/
-web/dist/
+web/dist/*
+!web/dist/index.html

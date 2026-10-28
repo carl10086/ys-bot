@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strconv"
 
@@ -41,6 +42,12 @@ func New(p *pg.PG, r *redis.Redis, s TurnStarter, userID string) *Server {
 }
 
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// WithStatic 挂载内嵌 SPA（GET / → dist/）。coder go:embed 同款做法。
+func (s *Server) WithStatic(fsys fs.FS) *Server {
+	s.mux.Handle("GET /", http.FileServerFS(fsys))
+	return s
+}
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.pg.CreateSession(r.Context(), s.userID, "")
