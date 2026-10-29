@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("pg: %v", err)
 	}
-	rdb, err := redis.NewRedis(envOr("REDIS_ADDR", "localhost:6379"), 0)
+	rdb, err := redis.NewRedis(envOr("REDIS_ADDR", "localhost:6379"), envOr("REDIS_PASSWORD", ""), 0)
 	if err != nil {
 		log.Fatalf("redis: %v", err)
 	}
@@ -67,7 +67,8 @@ func main() {
 	var drv vmdriver.Driver
 	if os.Getenv("VM_DRIVER") == "remote" {
 		drv = &vmdriver.RemoteDriver{PG: pgStore, Redis: goredis.NewClient(&goredis.Options{
-			Addr: envOr("REDIS_ADDR", "localhost:6379"),
+			Addr:     envOr("REDIS_ADDR", "localhost:6379"),
+			Password: envOr("REDIS_PASSWORD", ""),
 		})}
 		log.Print("[ys-worker] VM_DRIVER=remote，shell 工具已启用")
 	}

@@ -17,8 +17,8 @@ type Redis struct {
 	client *redis.Client
 }
 
-func NewRedis(addr string, db int) (*Redis, error) {
-	c := redis.NewClient(&redis.Options{Addr: addr, DB: db})
+func NewRedis(addr, password string, db int) (*Redis, error) {
+	c := redis.NewClient(&redis.Options{Addr: addr, Password: password, DB: db})
 	if err := c.Ping(context.Background()).Err(); err != nil {
 		return nil, err
 	}

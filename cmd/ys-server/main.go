@@ -31,7 +31,7 @@ func main() {
 	if err := pgStore.ApplySchema(ctx); err != nil { // 幂等建表，不引入 migrate 工具（选型 #9）
 		log.Fatalf("apply schema: %v", err)
 	}
-	rdb, err := redis.NewRedis(envOr("REDIS_ADDR", "localhost:6379"), 0)
+	rdb, err := redis.NewRedis(envOr("REDIS_ADDR", "localhost:6379"), envOr("REDIS_PASSWORD", ""), 0)
 	if err != nil {
 		log.Fatalf("redis: %v", err)
 	}

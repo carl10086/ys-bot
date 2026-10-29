@@ -33,6 +33,7 @@ type Config struct {
 	AdvertiseAddr  string // 写入 catalog 的本机地址，如 "152.136.212.59:50051"
 	PGDSN          string
 	RedisAddr      string
+	RedisPassword  string
 	ListenAddr     string // 默认 :50051
 	VMDir          string // VM 目录根，如 /data/firecracker/vms
 	FcBin          string // firecracker 二进制
@@ -46,7 +47,7 @@ func NewMux(ctx context.Context, cfg Config) (*http.ServeMux, error) {
 	if err != nil {
 		return nil, err
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
 	s := &server{cfg: cfg, pg: db, rdb: rdb, httpClient: http.DefaultClient}
 	if err := s.reconcile(ctx); err != nil {
 		return nil, fmt.Errorf("reconcile: %w", err)

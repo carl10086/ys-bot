@@ -16,7 +16,7 @@ func newTestRedis(t *testing.T) *Redis {
 		addr = "localhost:6379"
 	}
 	redisDBSeq++
-	r, err := NewRedis(addr, redisDBSeq)
+	r, err := NewRedis(addr, "", redisDBSeq)
 	if err != nil {
 		t.Skipf("Redis 不可用（先 cd deploy && docker compose up -d）：%v", err)
 	}

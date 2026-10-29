@@ -23,6 +23,7 @@ func main() {
 		AdvertiseAddr:  envOr("ADVERTISE_ADDR", ""),
 		PGDSN:          envOr("PG_DSN", "postgres://ys:ys@localhost:5432/ys_sandbox"),
 		RedisAddr:      envOr("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:  envOr("REDIS_PASSWORD", ""),
 		ListenAddr:     envOr("LISTEN_ADDR", ":50051"),
 		VMDir:          envOr("VM_DIR", "/data/firecracker/vms"),
 		FcBin:          envOr("FC_BIN", "/data/firecracker/firecracker"),

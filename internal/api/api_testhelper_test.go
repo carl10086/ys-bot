@@ -32,7 +32,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeStarter, *redis.Redis, 
 	if addr == "" {
 		addr = "localhost:6379"
 	}
-	r, err := redis.NewRedis(addr, 5)
+	r, err := redis.NewRedis(addr, "", 5)
 	if err != nil {
 		t.Skipf("Redis 不可用：%v", err)
 	}
