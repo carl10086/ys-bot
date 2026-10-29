@@ -38,7 +38,16 @@ services:
       POSTGRES_SEEDS: postgres
     ports:
       - "7233:7233"  # gRPC frontend
-      - "8233:8233"  # Web UI
+
+  # Web UI（auto-setup 镜像只在容器内占 8233 但不提供 UI，需独立服务）
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "8233:8080"
 
 volumes:
   pgdata:
