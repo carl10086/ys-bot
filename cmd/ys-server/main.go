@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"ys-sandbox/internal/api"
+	"ys-sandbox/internal/hitsend"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
 	"ys-sandbox/internal/workflow"
@@ -41,7 +42,8 @@ func main() {
 	}
 	defer tc.Close()
 
-	handler := api.New(pgStore, rdb, workflow.TemporalStarter{Client: tc}, envOr("YS_USER_ID", "local")).
+	svc := &hitsend.Service{PG: pgStore, Redis: rdb, Starter: workflow.TemporalStarter{Client: tc}}
+	handler := api.New(pgStore, rdb, svc, envOr("YS_USER_ID", "local")).
 		WithStatic(web.Dist()).
 		Handler()
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"ys-sandbox/internal/hitsend"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
 )
@@ -38,7 +39,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeStarter, *redis.Redis, 
 	}
 
 	starter := &fakeStarter{}
-	srv := httptest.NewServer(New(p, r, starter, "local").Handler())
+	svc := &hitsend.Service{PG: p, Redis: r, Starter: starter}
+	srv := httptest.NewServer(New(p, r, svc, "local").Handler())
 	return srv, starter, r, func() {
 		srv.Close()
 		p.Close()

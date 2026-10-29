@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,30 +11,24 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 
+	"ys-sandbox/internal/hitsend"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
 )
 
-// TurnStarter 把"启动/取消 turn"的 Temporal 依赖收窄成两个动作，测试可假。
-type TurnStarter interface {
-	StartTurn(ctx context.Context, workflowID, sessionID string) error
-	CancelTurn(ctx context.Context, workflowID string) error
-}
-
 type Server struct {
 	pg      *pg.PG
 	redis   *redis.Redis
-	starter TurnStarter
+	svc     *hitsend.Service
 	userID  string // v1 常量 "local"
 	mux     *http.ServeMux
 }
 
-func New(p *pg.PG, r *redis.Redis, s TurnStarter, userID string) *Server {
-	srv := &Server{pg: p, redis: r, starter: s, userID: userID, mux: http.NewServeMux()}
+func New(p *pg.PG, r *redis.Redis, svc *hitsend.Service, userID string) *Server {
+	srv := &Server{pg: p, redis: r, svc: svc, userID: userID, mux: http.NewServeMux()}
 	srv.mux.HandleFunc("POST /api/sessions", srv.createSession)
 	srv.mux.HandleFunc("GET /api/sessions", srv.listSessions)
 	srv.mux.HandleFunc("GET /api/sessions/{id}", srv.getSession)
@@ -163,30 +156,14 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"id": sid.String()})
 }
 
-// autoTitle 首条消息自动命名：仅在标题仍为空时生效（显式标题/手动 rename 不被覆盖）。
-// 失败只记日志级忽略——命名是锦上添花，不能影响发消息主链路。
-func (s *Server) autoTitle(ctx context.Context, sid uuid.UUID, text string) {
-	sess, err := s.pg.GetSession(ctx, sid)
-	if err != nil || sess.Title != "" {
-		return
-	}
-	runes := []rune(strings.TrimSpace(text))
-	title := string(runes)
-	if len(runes) > 30 {
-		title = string(runes[:30]) + "…"
-	}
-	_, _ = s.pg.RenameSession(ctx, sid, title)
-}
-
 type sendRequest struct {
 	MsgID string `json:"msg_id"`
 	Text  string `json:"text"`
 }
 
-// sendMessage 讲座 15 Sending + 讲座 17 用户特权的完整实现。
-// 顺序铁律：先落 PG（幂等）→ 再入队 → 再处理锁（队列可丢，消息不丢）。
+// sendMessage hit-send 协议的 HTTP 适配：解析 → hitsend.Submit → 响应。
+// 协议本体（幂等/入队/打断/起 turn 的顺序铁律）在 hitsend 包。
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	sid, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
@@ -202,60 +179,12 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fmt.Errorf("msg_id 必须是 uuid 且 text 非空"), http.StatusBadRequest)
 		return
 	}
-
-	content := pg.MarshalText(req.Text)
-	seq, inserted, err := s.pg.InsertMessage(ctx, pg.Message{
-		SessionID: sid, Kind: pg.KindUser, Content: content, MsgID: &msgID,
-	})
+	seq, deduped, err := s.svc.Submit(r.Context(), sid, msgID, req.Text)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if !inserted {
-		// 客户端重发：直接返回已存在的 seq，不再入队/触发（讲座 15 去重）
-		writeJSON(w, map[string]any{"seq": seq, "deduped": true})
-		return
-	}
-
-	// 首条消息自动命名：会话还没标题时取消息开头当标题（ChatGPT 同款，可再手动 rename）
-	if seq == 1 {
-		s.autoTitle(ctx, sid, req.Text)
-	}
-
-	if err := s.redis.PushMessage(ctx, redis.Queue{SessionID: sid.String()}, strconv.FormatInt(seq, 10)); err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	workflowID := fmt.Sprintf("turn:%s:%s", sid, uuid.NewString())
-	ok, err := s.redis.TryAcquireTurn(ctx, sid.String(), workflowID)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	if !ok {
-		// 有 turn 在跑 → 用户特权：打断它，合并队列开新 turn（讲座 17）
-		holder, err := s.redis.TurnHolder(ctx, sid.String())
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		if holder != "" {
-			if err := s.starter.CancelTurn(ctx, holder); err != nil {
-				writeErr(w, fmt.Errorf("cancel running turn: %w", err))
-				return
-			}
-		}
-		if err := s.redis.ForceSetTurn(ctx, sid.String(), workflowID); err != nil {
-			writeErr(w, err)
-			return
-		}
-	}
-	if err := s.starter.StartTurn(ctx, workflowID, sid.String()); err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, map[string]any{"seq": seq, "deduped": false})
+	writeJSON(w, map[string]any{"seq": seq, "deduped": deduped})
 }
 
 func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
