@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package vmhostd.v1;
+
+option go_package = "ys-sandbox/internal/gen/vmhostd/v1;vmhostdv1";
+
+import "agentd/v1/agentd.proto";
+
+// Vmhostd VM 宿主上的哑基础设施：管 firecracker 进程生命周期 + 代理 agentd 调用。
+// 零 LLM/workflow 逻辑。设计见 docs/ys-powers/specs/2026-10-29-m2-design.md。
+service Vmhostd {
+  // EnsureVM 幂等：sandbox 的 VM 醒着就直接返回 endpoint，否则建 VM 并等 agentd 就绪。
+  rpc EnsureVM(EnsureVMRequest) returns (EnsureVMResponse);
+  // DestroyVM 销毁 VM 并回收 slot/tap/目录。
+  rpc DestroyVM(DestroyVMRequest) returns (DestroyVMResponse);
+  // StatusVM 查 PG 里的 sandbox 状态。
+  rpc StatusVM(StatusVMRequest) returns (StatusVMResponse);
+  // Exec 代理：按 sandbox_id 转发到对应 VM 的 agentd。
+  rpc Exec(agentd.v1.ExecRequest) returns (agentd.v1.ExecResponse);
+}
+
+message EnsureVMRequest {
+  string sandbox_id = 1;
+}
+
+message EnsureVMResponse {
+  string endpoint = 1; // agentd 地址，如 "10.200.0.2:4998"
+}
+
+message DestroyVMRequest {
+  string sandbox_id = 1;
+}
+
+message DestroyVMResponse {}
+
+message StatusVMRequest {
+  string sandbox_id = 1;
+}
+
+message StatusVMResponse {
+  string status = 1; // creating / awake / stopped / failed
+  string endpoint = 2;
+}

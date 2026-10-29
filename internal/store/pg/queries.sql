@@ -50,3 +50,39 @@ SELECT session_id, seq, kind, content, msg_id, turn_id, created_at
 FROM messages
 WHERE session_id = $1 AND seq > $2
 ORDER BY seq;
+
+-- ===== sandboxes（M2；vmhostd 管 slot/status，worker/server 管建行）=====
+
+-- name: CreateSandbox :one
+INSERT INTO sandboxes (id, user_id, host_id, status)
+VALUES ($1, $2, $3, 'creating')
+RETURNING id, user_id, host_id, status, slot, vm_ip, created_at;
+
+-- name: GetSandboxByID :one
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at FROM sandboxes WHERE id = $1;
+
+-- name: GetSandboxByUser :one
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at FROM sandboxes WHERE user_id = $1;
+
+-- name: ListUsedSlotsByHost :many
+SELECT slot FROM sandboxes WHERE host_id = $1 AND slot IS NOT NULL;
+
+-- name: ListActiveSandboxesByHost :many
+-- vmhostd 启动 reconcile 用：本宿主上 PG 认为还活着的 VM。
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE host_id = $1 AND status IN ('creating', 'awake');
+
+-- name: SetSandboxAwake :one
+-- slot 分配与置 awake 同事务；UNIQUE(host_id,slot) 兜底并发冲突。
+UPDATE sandboxes SET slot = $2, vm_ip = $3, status = 'awake'
+WHERE id = $1
+RETURNING id;
+
+-- name: SetSandboxStatus :exec
+UPDATE sandboxes SET status = $2 WHERE id = $1;
+
+-- name: ReleaseSandbox :exec
+-- DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。
+UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL
+WHERE id = $1;

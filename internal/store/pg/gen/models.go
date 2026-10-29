@@ -21,6 +21,18 @@ type Message struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Sandbox struct {
+	ID             uuid.UUID
+	UserID         string
+	HostID         string
+	Status         string
+	Slot           pgtype.Int4
+	VmIp           pgtype.Text
+	SnapshotRef    pgtype.Text
+	LastActivityAt pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+}
+
 type Session struct {
 	ID        uuid.UUID
 	UserID    string

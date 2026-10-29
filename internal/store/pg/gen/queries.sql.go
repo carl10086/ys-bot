@@ -12,6 +12,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createSandbox = `-- name: CreateSandbox :one
+
+INSERT INTO sandboxes (id, user_id, host_id, status)
+VALUES ($1, $2, $3, 'creating')
+RETURNING id, user_id, host_id, status, slot, vm_ip, created_at
+`
+
+type CreateSandboxParams struct {
+	ID     uuid.UUID
+	UserID string
+	HostID string
+}
+
+type CreateSandboxRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+// ===== sandboxes（M2；vmhostd 管 slot/status，worker/server 管建行）=====
+func (q *Queries) CreateSandbox(ctx context.Context, arg CreateSandboxParams) (CreateSandboxRow, error) {
+	row := q.db.QueryRow(ctx, createSandbox, arg.ID, arg.UserID, arg.HostID)
+	var i CreateSandboxRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.HostID,
+		&i.Status,
+		&i.Slot,
+		&i.VmIp,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :one
 
 INSERT INTO sessions (id, user_id, title)
@@ -75,6 +114,64 @@ func (q *Queries) GetMessageSeqByMsgID(ctx context.Context, msgID *uuid.UUID) (i
 	return seq, err
 }
 
+const getSandboxByID = `-- name: GetSandboxByID :one
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at FROM sandboxes WHERE id = $1
+`
+
+type GetSandboxByIDRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) GetSandboxByID(ctx context.Context, id uuid.UUID) (GetSandboxByIDRow, error) {
+	row := q.db.QueryRow(ctx, getSandboxByID, id)
+	var i GetSandboxByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.HostID,
+		&i.Status,
+		&i.Slot,
+		&i.VmIp,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSandboxByUser = `-- name: GetSandboxByUser :one
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at FROM sandboxes WHERE user_id = $1
+`
+
+type GetSandboxByUserRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) GetSandboxByUser(ctx context.Context, userID string) (GetSandboxByUserRow, error) {
+	row := q.db.QueryRow(ctx, getSandboxByUser, userID)
+	var i GetSandboxByUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.HostID,
+		&i.Status,
+		&i.Slot,
+		&i.VmIp,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getSession = `-- name: GetSession :one
 SELECT id, user_id, title, created_at FROM sessions WHERE id = $1
 `
@@ -130,6 +227,51 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const listActiveSandboxesByHost = `-- name: ListActiveSandboxesByHost :many
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE host_id = $1 AND status IN ('creating', 'awake')
+`
+
+type ListActiveSandboxesByHostRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+// vmhostd 启动 reconcile 用：本宿主上 PG 认为还活着的 VM。
+func (q *Queries) ListActiveSandboxesByHost(ctx context.Context, hostID string) ([]ListActiveSandboxesByHostRow, error) {
+	rows, err := q.db.Query(ctx, listActiveSandboxesByHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveSandboxesByHostRow
+	for rows.Next() {
+		var i ListActiveSandboxesByHostRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.HostID,
+			&i.Status,
+			&i.Slot,
+			&i.VmIp,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listMessagesAfter = `-- name: ListMessagesAfter :many
@@ -227,6 +369,30 @@ func (q *Queries) ListSessionsByUser(ctx context.Context, userID string) ([]List
 	return items, nil
 }
 
+const listUsedSlotsByHost = `-- name: ListUsedSlotsByHost :many
+SELECT slot FROM sandboxes WHERE host_id = $1 AND slot IS NOT NULL
+`
+
+func (q *Queries) ListUsedSlotsByHost(ctx context.Context, hostID string) ([]pgtype.Int4, error) {
+	rows, err := q.db.Query(ctx, listUsedSlotsByHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.Int4
+	for rows.Next() {
+		var slot pgtype.Int4
+		if err := rows.Scan(&slot); err != nil {
+			return nil, err
+		}
+		items = append(items, slot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextSeq = `-- name: NextSeq :one
 UPDATE sessions SET last_seq = last_seq + 1 WHERE id = $1
 RETURNING last_seq
@@ -238,6 +404,51 @@ func (q *Queries) NextSeq(ctx context.Context, id uuid.UUID) (int64, error) {
 	var last_seq int64
 	err := row.Scan(&last_seq)
 	return last_seq, err
+}
+
+const releaseSandbox = `-- name: ReleaseSandbox :exec
+UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL
+WHERE id = $1
+`
+
+// DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。
+func (q *Queries) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, releaseSandbox, id)
+	return err
+}
+
+const setSandboxAwake = `-- name: SetSandboxAwake :one
+UPDATE sandboxes SET slot = $2, vm_ip = $3, status = 'awake'
+WHERE id = $1
+RETURNING id
+`
+
+type SetSandboxAwakeParams struct {
+	ID   uuid.UUID
+	Slot pgtype.Int4
+	VmIp pgtype.Text
+}
+
+// slot 分配与置 awake 同事务；UNIQUE(host_id,slot) 兜底并发冲突。
+func (q *Queries) SetSandboxAwake(ctx context.Context, arg SetSandboxAwakeParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, setSandboxAwake, arg.ID, arg.Slot, arg.VmIp)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const setSandboxStatus = `-- name: SetSandboxStatus :exec
+UPDATE sandboxes SET status = $2 WHERE id = $1
+`
+
+type SetSandboxStatusParams struct {
+	ID     uuid.UUID
+	Status string
+}
+
+func (q *Queries) SetSandboxStatus(ctx context.Context, arg SetSandboxStatusParams) error {
+	_, err := q.db.Exec(ctx, setSandboxStatus, arg.ID, arg.Status)
+	return err
 }
 
 const updateSessionTitle = `-- name: UpdateSessionTitle :one

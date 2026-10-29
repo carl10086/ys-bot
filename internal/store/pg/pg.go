@@ -214,6 +214,111 @@ func (p *PG) InsertMessage(ctx context.Context, m Message) (seq int64, inserted 
 	return seq, true, tx.Commit(ctx)
 }
 
+// ===== sandboxes（M2；data-model.md 2026-10-29 修订）=====
+
+// sandbox 状态机（M2 用子集：creating → awake → stopped；failed 异常路径）。
+const (
+	SandboxStatusCreating = "creating"
+	SandboxStatusAwake    = "awake"
+	SandboxStatusStopped  = "stopped"
+	SandboxStatusFailed   = "failed"
+)
+
+// Sandbox 一用户一台 VM 的档案卡。Slot/VMIP 未分配时为空。
+type Sandbox struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      *int32
+	VMIP      string
+	CreatedAt time.Time
+}
+
+func (p *PG) CreateSandbox(ctx context.Context, userID, hostID string) (Sandbox, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Sandbox{}, fmt.Errorf("uuidv7: %w", err)
+	}
+	r, err := p.q.CreateSandbox(ctx, gen.CreateSandboxParams{ID: id, UserID: userID, HostID: hostID})
+	if err != nil {
+		return Sandbox{}, err
+	}
+	return sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt), nil
+}
+
+func (p *PG) GetSandboxByID(ctx context.Context, id uuid.UUID) (Sandbox, error) {
+	r, err := p.q.GetSandboxByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return Sandbox{}, err
+	}
+	return sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt), nil
+}
+
+func (p *PG) GetSandboxByUser(ctx context.Context, userID string) (Sandbox, error) {
+	r, err := p.q.GetSandboxByUser(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return Sandbox{}, err
+	}
+	return sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt), nil
+}
+
+func (p *PG) ListUsedSlotsByHost(ctx context.Context, hostID string) ([]int32, error) {
+	rows, err := p.q.ListUsedSlotsByHost(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int32, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, s.Int32)
+	}
+	return out, nil
+}
+
+func (p *PG) ListActiveSandboxesByHost(ctx context.Context, hostID string) ([]Sandbox, error) {
+	rows, err := p.q.ListActiveSandboxesByHost(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Sandbox, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt))
+	}
+	return out, nil
+}
+
+func (p *PG) SetSandboxAwake(ctx context.Context, id uuid.UUID, slot int32, vmIP string) error {
+	_, err := p.q.SetSandboxAwake(ctx, gen.SetSandboxAwakeParams{
+		ID:   id,
+		Slot: pgtype.Int4{Int32: slot, Valid: true},
+		VmIp: pgtype.Text{String: vmIP, Valid: true},
+	})
+	return err
+}
+
+func (p *PG) SetSandboxStatus(ctx context.Context, id uuid.UUID, status string) error {
+	return p.q.SetSandboxStatus(ctx, gen.SetSandboxStatusParams{ID: id, Status: status})
+}
+
+func (p *PG) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
+	return p.q.ReleaseSandbox(ctx, id)
+}
+
+func sandboxRow(id uuid.UUID, userID, hostID, status string, slot pgtype.Int4, vmIP pgtype.Text, createdAt pgtype.Timestamptz) Sandbox {
+	s := Sandbox{ID: id, UserID: userID, HostID: hostID, Status: status, VMIP: vmIP.String, CreatedAt: createdAt.Time}
+	if slot.Valid {
+		v := slot.Int32
+		s.Slot = &v
+	}
+	return s
+}
+
 // ListMessages 返回会话中 seq > afterSeq 的全部消息，按 seq 升序（SPA 回显协议）。
 func (p *PG) ListMessages(ctx context.Context, sessionID uuid.UUID, afterSeq int64) ([]Message, error) {
 	rows, err := p.q.ListMessagesAfter(ctx, gen.ListMessagesAfterParams{SessionID: sessionID, Seq: afterSeq})

@@ -1,5 +1,19 @@
 -- M1 业务 schema（docs/architecture/data-model.md 统一建表约定）。
--- sandboxes 表 M2 再建（YAGNI）。
+-- sandboxes 表 M2 建（docs/ys-powers/specs/2026-10-29-m2-design.md）。
+
+CREATE TABLE IF NOT EXISTS sandboxes (
+  id               uuid PRIMARY KEY,              -- uuidv7，应用生成
+  user_id          text NOT NULL,                 -- 一用户一台（讲座 09）；UNIQUE
+  host_id          text NOT NULL,                 -- VM 所在宿主（slot 语义前提）
+  status           text NOT NULL,                 -- creating / awake / asleep / stopped / failed
+  slot             int,                           -- 宿主本地 IP 编号；NULL = 未分配
+  vm_ip            text,                          -- 由 slot 推出的 agentd 地址（含端口）
+  snapshot_ref     text,                          -- M4
+  last_activity_at timestamptz,                   -- M4
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (host_id, slot),                         -- slot 宿主内唯一（NULL 不冲突）
+  UNIQUE (user_id)
+);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id         uuid PRIMARY KEY,              -- uuidv7，应用生成
