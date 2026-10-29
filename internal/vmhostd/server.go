@@ -151,20 +151,6 @@ func (s *server) Exec(ctx context.Context, req *connect.Request[agentdv1.ExecReq
 	return resp, nil
 }
 
-// catalogSet / catalogDel 写 Redis 路由目录（可丢协调态，见 data-model.md）。
-func (s *server) catalogSet(ctx context.Context, id uuid.UUID, endpoint string) {
-	key := "sandbox:host:" + id.String()
-	if err := s.rdb.HSet(ctx, key, "host_id", s.cfg.HostID, "endpoint", endpoint).Err(); err != nil {
-		log.Printf("[vmhostd] catalog set sb=%s: %v", shortID(id), err)
-	}
-}
-
-func (s *server) catalogDel(ctx context.Context, id uuid.UUID) {
-	if err := s.rdb.Del(ctx, "sandbox:host:"+id.String()).Err(); err != nil {
-		log.Printf("[vmhostd] catalog del sb=%s: %v", shortID(id), err)
-	}
-}
-
 // heartbeatLoop 每 10s 续一次 TTL=30s 的存活 key；进程死了 key 自动消失（穷人版注册中心）。
 func (s *server) heartbeatLoop(ctx context.Context) {
 	key := "vmhost:alive:" + s.cfg.HostID

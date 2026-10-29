@@ -63,7 +63,6 @@ func (s *server) ensureVM(ctx context.Context, sandboxID uuid.UUID) (string, err
 		s.cleanupVM(dir, a.tap)
 		return "", fmt.Errorf("slot 落库（可能并发抢号，可重试）: %w", err)
 	}
-	s.catalogSet(ctx, sandboxID, endpoint)
 	return endpoint, nil
 }
 
@@ -130,7 +129,7 @@ func (s *server) waitAgentd(ctx context.Context, endpoint string) error {
 	}
 }
 
-// destroyVM 杀进程、拆 tap、删目录、释放 slot（PG）、清 catalog。幂等。
+// destroyVM 杀进程、拆 tap、删目录、释放 slot（PG）。幂等。
 func (s *server) destroyVM(ctx context.Context, sandboxID uuid.UUID) error {
 	sb, err := s.pg.GetSandboxByID(ctx, sandboxID)
 	if errors.Is(err, errNotFound) {
@@ -147,7 +146,6 @@ func (s *server) destroyVM(ctx context.Context, sandboxID uuid.UUID) error {
 	if err := s.pg.ReleaseSandbox(ctx, sandboxID); err != nil {
 		return err
 	}
-	s.catalogDel(ctx, sandboxID)
 	return nil
 }
 
@@ -186,7 +184,6 @@ func (s *server) reconcile(ctx context.Context) error {
 			log.Printf("[vmhostd] reconcile sb=%s: %v", shortID(sb.ID), err)
 			continue
 		}
-		s.catalogDel(ctx, sb.ID)
 		log.Printf("[vmhostd] reconcile sb=%s → stopped", shortID(sb.ID))
 	}
 	return nil
