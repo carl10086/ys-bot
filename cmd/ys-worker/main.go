@@ -7,6 +7,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
+	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -49,7 +51,17 @@ func main() {
 	}
 	defer c.Close()
 
-	w := worker.New(c, workflow.TaskQueue, worker.Options{})
+	// DEBUG_DEADLOCK_TIMEOUT_SEC：GoLand 断点调试 workflow 代码时用——把 deadlock
+	// detector 超时从默认 1s 放大（如 3600），否则断点冻结协程会触发 TMPRL1101。
+	// 只在 debug 配置里设；它同时会掩盖真死锁，生产勿设。
+	wOpts := worker.Options{}
+	if v := os.Getenv("DEBUG_DEADLOCK_TIMEOUT_SEC"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil {
+			wOpts.DeadlockDetectionTimeout = time.Duration(sec) * time.Second
+			log.Printf("[ys-worker] deadlock detector 超时放宽到 %ds（仅调试用）", sec)
+		}
+	}
+	w := worker.New(c, workflow.TaskQueue, wOpts)
 	w.RegisterWorkflow(workflow.TurnWorkflow)
 	// VM 工具环境（M2）：VM_DRIVER=remote 时启用；缺省无 Driver = M1 纯对话行为。
 	var drv vmdriver.Driver
