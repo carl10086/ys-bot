@@ -45,13 +45,22 @@ Message
   UNIQUE (session_id, seq)
 
 Sandbox
-  id uuid PK
-  user_id text          -- 归属用户：讲座 09 "one VM per user"，sandbox→user 而非 sandbox→session
+  id uuid PK            -- uuidv7，应用生成
+  user_id text          -- 归属用户：讲座 09 "one VM per user"；UNIQUE
+  host_id text          -- VM 所在宿主（slot 语义的前提，2026-10-29 M2 评审加）
   status text           -- creating / awake / asleep / stopped / failed
-  vm_ip text            -- agentd 的 Connect-RPC 地址；VM 重建后 IP 会变，必须落库
-  snapshot_ref text     -- 指向文件存储 snapshots/{sandbox_id}/
-  last_activity_at      -- 空闲计时依据（"5 分钟无活动 → 快照 → 停机"）
+  slot int              -- 宿主本地 IP 编号，UNIQUE(host_id, slot)，vmhostd 分配
+  vm_ip text            -- 由 slot 推出的 agentd 地址，冗余落库省计算；VM 重建会变
+  snapshot_ref text     -- M4：指向文件存储 snapshots/{sandbox_id}/
+  last_activity_at      -- M4：空闲计时依据
 ```
+
+**sandboxes 各列的存储分工（2026-10-29 M2 评审）**：PG 记"应该存在什么"（档案卡），
+Redis 记"此刻谁活着"（值班表）。id/user_id/host_id/slot/vm_ip/status 都是低频列 → PG；
+"VM 此刻活着吗、怎么连"是高频易逝 → Redis catalog（见下）。last_activity_at M4 再定
+（倾向 Redis 为主、PG 定期落）。
+**宿主重启对账**：firecracker 进程随重启全灭，PG 行还在——vmhostd 启动时 reconcile，
+把 host_id=自己但本地无进程的 sandboxes 标 stopped（slot 随之释放）。
 
 - **sessions 是什么**：一次会话的元数据。消息、队列、锁、SPA 都按会话组织。
 - **messages 是什么**：会话的完整记录，**含 turn 的每一步**（讲座 15 黑条 "Every step is saved to the database"）。msg_id 客户端生成（讲座 15："saves the message locally with a unique ID"），去重 = `INSERT ... ON CONFLICT(msg_id) DO NOTHING`，不需要 Redis 幂等窗。
@@ -71,6 +80,8 @@ Sandbox
 | 会话队列 | 待处理消息缓冲；turn 开始时 drain 成一批（讲座 17 批量规则） | LIST，key `session:{id}:queue` | 瞬时、单消费者、一条命令全取；消息已先落 PG，队列丢了能重建 |
 | turn 锁 | 保证"一会话一 turn"（讲座 15）；值存 workflowID，供打断时 Cancel | STRING，`SET NX EX 600` | SETNX 原子抢占；TTL 让崩溃的 worker 自动释放 |
 | 变更信号 | "something changed" 空信号（讲座 15 Watching） | Pub/Sub，频道 `changed:{session}` | 协议自带"丢了无害"；SPA 收到后带 seq 回源拉真数据 |
+| vmhost 心跳 | "哪些宿主活着、endpoint 是什么"（2026-10-29 M2 评审加） | STRING，`vmhost:alive:{host_id}`，TTL 30s 心跳续期 | 穷人版注册中心；进程死 key 自动消失；e2b 用 nomad 做，我们没 nomad |
+| sandbox catalog | sandbox → 宿主/连接信息（e2b sandbox-catalog 同款） | STRING，`sandbox:host:{sandbox_id}`，VM 销毁时删 | 运行时路由信息，高频易逝归 Redis；丢了由 vmhostd 重注册重建 |
 
 ~~幂等窗 `msg:seen:{id}`~~ 已删除：PG `UNIQUE(msg_id)` + `ON CONFLICT` 就是讲座 15 去重的精确实现。
 

@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package agentd.v1;
+
+option go_package = "ys-sandbox/internal/gen/agentd/v1;agentdv1";
+
+// Agentd VM 内守护进程：真正执行命令的地方（e2b envd 的砍版）。
+// 协议背景见 docs/ys-powers/specs/2026-10-29-m2-design.md §2。
+service Agentd {
+  // Health 健康探测：vmhostd 起 VM 后轮询它确认 agentd 就绪。
+  rpc Health(HealthRequest) returns (HealthResponse);
+  // Exec 同步执行一条 shell 命令，跑完返回（M2 不做流式/PTY）。
+  rpc Exec(ExecRequest) returns (ExecResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {}
+
+message ExecRequest {
+  string cmd = 1;      // 经 /bin/sh -c 执行
+  string workdir = 2;  // 空 = agentd 默认工作目录
+  uint32 timeout_sec = 3; // 0 = 服务端默认值（60s）
+}
+
+message ExecResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+}
