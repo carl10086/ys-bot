@@ -10,7 +10,7 @@ import (
 
 // 假 OpenAI 兼容端点：回显最后一条 user 消息的文本。
 // 验证点：① 适配层把历史正确映射为 OpenAI messages ② 返回文本被正确读出。
-func TestAgent_Reply_MapsHistoryAndReturnsText(t *testing.T) {
+func TestAgent_Step_MapsHistoryAndReturnsText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Messages []struct {
@@ -55,15 +55,18 @@ func TestAgent_Reply_MapsHistoryAndReturnsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := a.Reply(context.Background(), []Message{
+	res, err := a.Step(context.Background(), []Message{
 		{Role: "user", Content: "第一条"},
 		{Role: "assistant", Content: "回复一"},
 		{Role: "user", Content: "最新问题"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "echo:最新问题" {
-		t.Fatalf("reply=%q, want echo:最新问题", reply)
+	if res.Text != "echo:最新问题" {
+		t.Fatalf("text=%q, want echo:最新问题", res.Text)
+	}
+	if len(res.ToolCalls) != 0 {
+		t.Fatalf("无工具请求不应产生 ToolCalls: %+v", res.ToolCalls)
 	}
 }

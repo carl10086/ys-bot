@@ -11,13 +11,15 @@ import (
 	"ys-sandbox/internal/agent"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
+	"ys-sandbox/internal/vmdriver"
 )
 
 // Activities TurnWorkflow 的全部副作用。每步落库 / 空信号 = 讲座 15 黑条的实现。
 type Activities struct {
-	PG    *pg.PG
-	Redis *redis.Redis
-	Agent agent.Agent
+	PG     *pg.PG
+	Redis  *redis.Redis
+	Agent  agent.Agent
+	Driver vmdriver.Driver // nil = 无工具环境（M1 行为）
 }
 
 // DrainQueue 取走会话队列里待处理的一批消息（seq 列表）。队列可丢：消息已在 PG。
@@ -55,16 +57,112 @@ func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent
 			role = "user"
 		case pg.KindAssistant:
 			role = "assistant"
+		case pg.KindToolCall:
+			// {"id","name","input"} → assistant 携带的工具调用
+			var v struct {
+				ID, Name, Input string
+			}
+			if json.Unmarshal(m.Content, &v) == nil {
+				out = append(out, agent.Message{
+					Role:      "assistant",
+					ToolCalls: []agent.ToolCall{{ID: v.ID, Name: v.Name, Input: v.Input}},
+				})
+			}
+			continue
+		case pg.KindToolResult:
+			// {"tool_call_id","name","output"} → role=tool 消息
+			var v struct {
+				ToolCallID string `json:"tool_call_id"`
+				Name       string `json:"name"`
+				Output     string `json:"output"`
+			}
+			if json.Unmarshal(m.Content, &v) == nil {
+				out = append(out, agent.Message{
+					Role: "tool", ToolCallID: v.ToolCallID, Name: v.Name, Content: v.Output,
+				})
+			}
+			continue
 		default:
-			continue // tool_call/tool_result 在 M2 才有意义
+			continue
 		}
 		out = append(out, agent.Message{Role: role, Content: extractText(m.Content)})
 	}
 	return out, nil
 }
 
-func (a *Activities) CallLLM(ctx context.Context, history []agent.Message) (string, error) {
-	return a.Agent.Reply(ctx, history)
+// shellTool M2 唯一工具（spec：先跑通架构，更多工具参考 envd/aider/codex 再加）。
+var shellTool = agent.ToolDef{
+	Name:        "shell",
+	Description: "在 agent 的 Linux 电脑（microVM）里执行一条 shell 命令，返回 stdout/stderr/exit_code",
+	InputSchema: map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"cmd": map[string]any{"type": "string", "description": "要执行的命令"}},
+		"required":   []string{"cmd"},
+	},
+}
+
+func (a *Activities) CallLLM(ctx context.Context, history []agent.Message) (agent.StepResult, error) {
+	var tools []agent.ToolDef
+	if a.Driver != nil { // 有 VM 环境才给工具（懒唤醒红线：纯对话不碰 VM）
+		tools = []agent.ToolDef{shellTool}
+	}
+	return a.Agent.Step(ctx, history, tools)
+}
+
+// EnsureAwake 首个 tool_call 前调一次：session → user → 唤醒/创建其 VM。返回 sandboxID。
+func (a *Activities) EnsureAwake(ctx context.Context, sessionID string) (string, error) {
+	sid, err := uuid.Parse(sessionID)
+	if err != nil {
+		return "", err
+	}
+	sess, err := a.PG.GetSession(ctx, sid)
+	if err != nil {
+		return "", err
+	}
+	sbID, err := a.Driver.EnsureAwake(ctx, sess.UserID)
+	if err != nil {
+		return "", err
+	}
+	return sbID.String(), nil
+}
+
+// ExecToolInput 一次工具执行。M2 只有 shell：Input = {"cmd": "..."}。
+type ExecToolInput struct {
+	SandboxID string
+	Name      string
+	Input     string // JSON
+}
+
+// execOutputMax 落库/回喂前 stdout+stderr 截断（尾部保留，防撑爆 messages）。
+const execOutputMax = 10 * 1024
+
+// ExecTool 经 driver 在 VM 里执行，返回 JSON {"exit_code","stdout","stderr"}。
+func (a *Activities) ExecTool(ctx context.Context, in ExecToolInput) (string, error) {
+	if in.Name != "shell" {
+		return "", fmt.Errorf("unknown tool %q", in.Name)
+	}
+	sbID, err := uuid.Parse(in.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	var args struct {
+		Cmd string `json:"cmd"`
+	}
+	if err := json.Unmarshal([]byte(in.Input), &args); err != nil || args.Cmd == "" {
+		return "", fmt.Errorf("shell 工具参数非法: %s", in.Input)
+	}
+	code, stdout, stderr, err := a.Driver.Exec(ctx, sbID, args.Cmd, 60)
+	if err != nil {
+		return "", err
+	}
+	if len(stdout) > execOutputMax {
+		stdout = stdout[len(stdout)-execOutputMax:]
+	}
+	if len(stderr) > execOutputMax {
+		stderr = stderr[len(stderr)-execOutputMax:]
+	}
+	out, _ := json.Marshal(map[string]any{"exit_code": code, "stdout": stdout, "stderr": stderr})
+	return string(out), nil
 }
 
 func (a *Activities) WriteMessage(ctx context.Context, in WriteMessageInput) (int64, error) {
@@ -72,7 +170,10 @@ func (a *Activities) WriteMessage(ctx context.Context, in WriteMessageInput) (in
 	if err != nil {
 		return 0, err
 	}
-	content, _ := json.Marshal(map[string]string{"text": in.Text})
+	content := in.Content
+	if content == nil {
+		content, _ = json.Marshal(map[string]string{"text": in.Text})
+	}
 	seq, _, err := a.PG.InsertMessage(ctx, pg.Message{
 		SessionID: sid, Kind: in.Kind, Content: content, TurnID: in.TurnID,
 	})

@@ -4,3 +4,4 @@ node_modules/
 web/dist/*
 !web/dist/index.html
 /.run
+/ys-worker

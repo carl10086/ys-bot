@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,10 +21,14 @@ type TurnInput struct {
 
 type WriteMessageInput struct {
 	SessionID string
-	Kind      string // assistant（M1 只会写这种）
-	Text      string // 门面内包成 {"text": ...} jsonb
+	Kind      string // assistant / tool_call / tool_result
+	Text      string // Content 为空时门面内包成 {"text": ...} jsonb
+	Content   []byte // tool 消息：调用方直接给 jsonb 原文
 	TurnID    string
 }
+
+// maxToolSteps 单 turn 工具调用步数上限（防 loop 失控）。
+const maxToolSteps = 20
 
 // TurnWorkflow 一个 turn 的完整生命周期。
 // 锁的释放用 disconnected context：被打断（CancelWorkflow）时也要放锁。
@@ -56,25 +61,73 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		return fmt.Errorf("load history: %w", err)
 	}
 
-	var reply string
-	if err := workflow.ExecuteActivity(ctx, "CallLLM", history).Get(ctx, &reply); err != nil {
-		return fmt.Errorf("call llm: %w", err)
-	}
+	// 工具 loop（spec §4）：模型一次 Step 要么回文本（收尾），要么给一批 tool_calls
+	// （首个 tool_call 前懒唤醒 VM → 逐个执行 → 每步落库 + 发信号 → 继续）。
+	sandboxID := ""
+	var lastSeq int64
+	for step := 0; ; step++ {
+		var res agent.StepResult
+		if err := workflow.ExecuteActivity(ctx, "CallLLM", history).Get(ctx, &res); err != nil {
+			return fmt.Errorf("call llm: %w", err)
+		}
+		if len(res.ToolCalls) == 0 {
+			err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+				SessionID: in.SessionID,
+				Kind:      "assistant",
+				Text:      res.Text,
+				TurnID:    turnID,
+			}).Get(ctx, &lastSeq)
+			if err != nil {
+				return fmt.Errorf("write message: %w", err)
+			}
+			break
+		}
+		if step >= maxToolSteps {
+			_ = workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+				SessionID: in.SessionID,
+				Kind:      "assistant",
+				Text:      fmt.Sprintf("（工具调用超过单 turn 上限 %d 次，先停在这里）", maxToolSteps),
+				TurnID:    turnID,
+			}).Get(ctx, &lastSeq)
+			break
+		}
+		if sandboxID == "" { // 懒唤醒：只在首个 tool_call 前
+			if err := workflow.ExecuteActivity(ctx, "EnsureAwake", in.SessionID).Get(ctx, &sandboxID); err != nil {
+				return fmt.Errorf("ensure awake: %w", err)
+			}
+		}
+		history = append(history, agent.Message{Role: "assistant", Content: res.Text, ToolCalls: res.ToolCalls})
+		for _, tc := range res.ToolCalls {
+			callContent, _ := json.Marshal(map[string]string{"id": tc.ID, "name": tc.Name, "input": tc.Input})
+			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+				SessionID: in.SessionID, Kind: "tool_call", Content: callContent, TurnID: turnID,
+			}).Get(ctx, nil); err != nil {
+				return fmt.Errorf("write tool_call: %w", err)
+			}
+			_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
 
-	var seq int64
-	err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
-		SessionID: in.SessionID,
-		Kind:      "assistant",
-		Text:      reply,
-		TurnID:    turnID,
-	}).Get(ctx, &seq)
-	if err != nil {
-		return fmt.Errorf("write message: %w", err)
+			var out string
+			if err := workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
+				SandboxID: sandboxID, Name: tc.Name, Input: tc.Input,
+			}).Get(ctx, &out); err != nil {
+				out = fmt.Sprintf(`{"exit_code":-1,"stderr":"%s"}`, err)
+			}
+			resultContent, _ := json.Marshal(map[string]string{
+				"tool_call_id": tc.ID, "name": tc.Name, "output": out,
+			})
+			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+				SessionID: in.SessionID, Kind: "tool_result", Content: resultContent, TurnID: turnID,
+			}).Get(ctx, nil); err != nil {
+				return fmt.Errorf("write tool_result: %w", err)
+			}
+			_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
+			history = append(history, agent.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Name, Content: out})
+		}
 	}
 
 	if err := workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil); err != nil {
 		return fmt.Errorf("publish changed: %w", err)
 	}
-	logger.Info("turn done", "batch", len(batch), "replySeq", seq)
+	logger.Info("turn done", "batch", len(batch), "replySeq", lastSeq)
 	return nil
 }

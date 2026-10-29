@@ -11,9 +11,12 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"ys-sandbox/internal/agent"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
+	"ys-sandbox/internal/vmdriver"
 	"ys-sandbox/internal/workflow"
 )
 
@@ -48,7 +51,15 @@ func main() {
 
 	w := worker.New(c, workflow.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(workflow.TurnWorkflow)
-	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag})
+	// VM 工具环境（M2）：VM_DRIVER=remote 时启用；缺省无 Driver = M1 纯对话行为。
+	var drv vmdriver.Driver
+	if os.Getenv("VM_DRIVER") == "remote" {
+		drv = &vmdriver.RemoteDriver{PG: pgStore, Redis: goredis.NewClient(&goredis.Options{
+			Addr: envOr("REDIS_ADDR", "localhost:6379"),
+		})}
+		log.Print("[ys-worker] VM_DRIVER=remote，shell 工具已启用")
+	}
+	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv})
 
 	log.Printf("listening on task queue %q", workflow.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
