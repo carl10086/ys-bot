@@ -1,29 +1,38 @@
-# M1 依赖：Temporal + PostgreSQL + Redis（均不自建，本地/服务器通用）
+# ys-sandbox 状态服务——部署在 VM 宿主（152.136.212.59）上，Mac 不再跑。
+# 拓扑（2026-10-30 迁移定案）：全部 bind 公网网卡 + 非标端口 + 密码；
+# 端口/密码来自同目录 .env（只存在于 152 的 /data/ys-infra/，不入库）：
+#   POSTGRES_PASSWORD / REDIS_PASSWORD
 # Temporal 与业务共用同一个 PG 实例、不同 database（temporal 自管 temporal/temporal_visibility，
-# 业务用 ys_sandbox）——概念上"Temporal PG 是执行账本，应用不查"（docs/architecture/data-model.md）。
+# 业务用 ys_sandbox）——"Temporal PG 是执行账本，应用不查"（docs/architecture/data-model.md）。
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ys
-      POSTGRES_PASSWORD: ys
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ys_sandbox
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports: ["15432:5432"]
+    volumes: ["/data/ys-infra/pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ys"]
       interval: 2s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}  # 仅供 healthcheck 使用
+    ports: ["16379:6379"]
+    volumes: ["/data/ys-infra/redisdata:/data"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping"]
       interval: 2s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   temporal:
     image: temporalio/auto-setup:1.25.2
@@ -32,12 +41,13 @@ services:
         condition: service_healthy
     environment:
       DB: postgres12_pgx
-      DB_PORT: "5432"
+      DB_PORT: "5432"           # compose 内网端口，不随宿主映射变
       POSTGRES_USER: ys
-      POSTGRES_PWD: ys
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
       POSTGRES_SEEDS: postgres
     ports:
-      - "7233:7233"  # gRPC frontend
+      - "17233:7233"  # gRPC frontend
+    restart: unless-stopped
 
   # Web UI（auto-setup 镜像只在容器内占 8233 但不提供 UI，需独立服务）
   temporal-ui:
@@ -47,7 +57,5 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
     ports:
-      - "8233:8080"
-
-volumes:
-  pgdata:
+      - "18233:8080"
+    restart: unless-stopped
