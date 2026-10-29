@@ -8,17 +8,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// 集成测试连 compose 起的 PG。YS_TEST_PG 未设置时用本地默认。
+// 集成测试连真实 PG（YS_TEST_PG 指向）。注意 ResetSchema 会 drop 重建，
+// 必须指向测试专用库（152 上的 ys_sandbox_test），严禁指向业务库。
 // 每次跑测试前重置 schema（drop + create），保证用例互不污染。
 func newTestPG(t *testing.T) *PG {
 	t.Helper()
 	dsn := os.Getenv("YS_TEST_PG")
 	if dsn == "" {
-		dsn = "postgres://ys:ys@localhost:5432/ys_sandbox"
+		dsn = "postgres://ys:ys@localhost:5432/ys_sandbox_test"
 	}
 	db, err := New(context.Background(), dsn)
 	if err != nil {
-		t.Skipf("PG 不可用（先 cd deploy && docker compose up -d）：%v", err)
+		t.Skipf("PG 不可用（YS_TEST_PG 指向测试专用库）：%v", err)
 	}
 	if err := db.ResetSchema(context.Background()); err != nil {
 		t.Fatalf("reset schema: %v", err)

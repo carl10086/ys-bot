@@ -30,7 +30,7 @@ var errNotFound = pg.ErrNotFound
 // Config vmhostd 运行配置（env 注入）。
 type Config struct {
 	HostID         string // 本宿主标识（写 sandboxes.host_id / 心跳 key）
-	AdvertiseAddr  string // 写入 catalog 的本机地址，如 "152.136.212.59:50051"
+	AdvertiseAddr  string // 写入 catalog 的本机地址，如 "152.136.212.59:15051"
 	PGDSN          string
 	RedisAddr      string
 	RedisPassword  string

@@ -118,25 +118,31 @@ func TestAPI_Events_SSEEmptySignal(t *testing.T) {
 		t.Fatalf("Content-Type=%q", ct)
 	}
 
-	// 触发一次真实变更信号（发布者是 workflow/worker，这里直接发到同一频道）
-	time.Sleep(50 * time.Millisecond) // 等订阅建立
-	if err := rdb.PublishChanged(context.Background(), sid); err != nil {
-		t.Fatal(err)
-	}
-
+	// 触发真实变更信号（发布者是 workflow/worker，这里直接发到同一频道）。
+	// 发布是幂等空信号：循环重发直到收到，兼容远端 Redis 的订阅建立延迟。
 	buf := make([]byte, 128)
 	done := make(chan string, 1)
 	go func() {
 		n, _ := resp.Body.Read(buf)
 		done <- string(buf[:n])
 	}()
-	select {
-	case got := <-done:
-		if !strings.HasPrefix(got, "data:") {
-			t.Fatalf("want SSE data frame, got %q", got)
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case got := <-done:
+			if !strings.HasPrefix(got, "data:") {
+				t.Fatalf("want SSE data frame, got %q", got)
+			}
+			return
+		case <-tick.C:
+			if err := rdb.PublishChanged(context.Background(), sid); err != nil {
+				t.Fatal(err)
+			}
+		case <-deadline:
+			t.Fatal("5s 内没收到 SSE 信号")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("3s 内没收到 SSE 信号")
 	}
 }
 

@@ -58,7 +58,9 @@ func main() {
 	if v := os.Getenv("DEBUG_DEADLOCK_TIMEOUT_SEC"); v != "" {
 		if sec, err := strconv.Atoi(v); err == nil {
 			wOpts.DeadlockDetectionTimeout = time.Duration(sec) * time.Second
-			log.Printf("[ys-worker] deadlock detector 超时放宽到 %ds（仅调试用）", sec)
+			log.Printf("deadlock detector 超时放宽到 %ds（仅调试用）", sec)
+		} else {
+			log.Printf("DEBUG_DEADLOCK_TIMEOUT_SEC=%q 不是数字，忽略", v)
 		}
 	}
 	w := worker.New(c, workflow.TaskQueue, wOpts)
@@ -70,7 +72,7 @@ func main() {
 			Addr:     envOr("REDIS_ADDR", "localhost:6379"),
 			Password: envOr("REDIS_PASSWORD", ""),
 		})}
-		log.Print("[ys-worker] VM_DRIVER=remote，shell 工具已启用")
+		log.Print("VM_DRIVER=remote，shell 工具已启用")
 	}
 	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv})
 

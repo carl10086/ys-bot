@@ -87,8 +87,16 @@ func (r *Redis) PublishChanged(ctx context.Context, sessionID string) error {
 }
 
 // SubscribeChanged 订阅变更信号；返回只读 channel 与退订函数。
+// 返回前同步等订阅确认（Receive）——否则订阅尚未生效时的 Publish 会丢信号
+// （本地亚毫秒时很难踩到，远端 Redis 40ms RTT 下必现）。
 func (r *Redis) SubscribeChanged(ctx context.Context, sessionID string) (<-chan struct{}, func()) {
 	sub := r.client.Subscribe(ctx, changedKey(sessionID))
+	if _, err := sub.Receive(ctx); err != nil { // 等 SUBSCRIBE 生效
+		sub.Close()
+		ch := make(chan struct{})
+		close(ch)
+		return ch, func() {}
+	}
 	ch := make(chan struct{}, 16)
 	go func() {
 		defer close(ch)

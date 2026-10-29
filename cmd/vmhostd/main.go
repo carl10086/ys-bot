@@ -21,7 +21,7 @@ func main() {
 	cfg := vmhostd.Config{
 		HostID:         envOr("HOST_ID", vmhostd.Hostname()),
 		AdvertiseAddr:  envOr("ADVERTISE_ADDR", ""),
-		PGDSN:          envOr("PG_DSN", "postgres://ys:ys@localhost:5432/ys_sandbox"),
+		PGDSN:          envOr("PG_DSN", ""),
 		RedisAddr:      envOr("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:  envOr("REDIS_PASSWORD", ""),
 		ListenAddr:     envOr("LISTEN_ADDR", ":50051"),
@@ -31,7 +31,10 @@ func main() {
 		RootfsTemplate: envOr("ROOTFS_TEMPLATE", "/data/firecracker/rootfs-agentd.ext4"),
 	}
 	if cfg.AdvertiseAddr == "" {
-		log.Fatal("ADVERTISE_ADDR 必填（写入 catalog 的本机地址，如 152.136.212.59:50051）")
+		log.Fatal("ADVERTISE_ADDR 必填（写入 catalog 的本机地址，如 152.136.212.59:15051）")
+	}
+	if cfg.PGDSN == "" {
+		log.Fatal("PG_DSN 必填")
 	}
 	log.Fatal(vmhostd.ListenAndServe(context.Background(), cfg))
 }
