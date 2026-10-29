@@ -69,15 +69,28 @@ func (s *server) vmDir(id uuid.UUID) string {
 	return filepath.Join(s.cfg.VMDir, id.String())
 }
 
+// shortID 日志用短 sandbox id（docker 短容器 ID / git 短 SHA 风格）。
+func shortID(id uuid.UUID) string {
+	s := id.String()
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
 func (s *server) EnsureVM(ctx context.Context, req *connect.Request[vmhostdv1.EnsureVMRequest]) (*connect.Response[vmhostdv1.EnsureVMResponse], error) {
 	id, err := uuid.Parse(req.Msg.SandboxId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	start := time.Now()
 	endpoint, err := s.ensureVM(ctx, id)
 	if err != nil {
+		log.Printf("[vmhostd] ensure sb=%s err=%v dur=%s", shortID(id), err, time.Since(start).Round(time.Millisecond))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	// dur 即故事：毫秒级 = 幂等命中（VM 复用），秒级 = 真起了 VM（另有 boot 日志）
+	log.Printf("[vmhostd] ensure sb=%s endpoint=%s dur=%s", shortID(id), endpoint, time.Since(start).Round(time.Millisecond))
 	return connect.NewResponse(&vmhostdv1.EnsureVMResponse{Endpoint: endpoint}), nil
 }
 
@@ -86,9 +99,12 @@ func (s *server) DestroyVM(ctx context.Context, req *connect.Request[vmhostdv1.D
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	start := time.Now()
 	if err := s.destroyVM(ctx, id); err != nil {
+		log.Printf("[vmhostd] destroy sb=%s err=%v dur=%s", shortID(id), err, time.Since(start).Round(time.Millisecond))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	log.Printf("[vmhostd] destroy sb=%s dur=%s", shortID(id), time.Since(start).Round(time.Millisecond))
 	return connect.NewResponse(&vmhostdv1.DestroyVMResponse{}), nil
 }
 
@@ -104,6 +120,7 @@ func (s *server) StatusVM(ctx context.Context, req *connect.Request[vmhostdv1.St
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	log.Printf("[vmhostd] status sb=%s status=%s", shortID(id), sb.Status)
 	return connect.NewResponse(&vmhostdv1.StatusVMResponse{Status: sb.Status, Endpoint: sb.VMIP}), nil
 }
 
@@ -123,20 +140,27 @@ func (s *server) Exec(ctx context.Context, req *connect.Request[agentdv1.ExecReq
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("VM 非 awake: %s", sb.Status))
 	}
 	c := agentdv1connect.NewAgentdClient(s.httpClient, "http://"+sb.VMIP)
-	return c.Exec(ctx, req)
+	start := time.Now()
+	resp, err := c.Exec(ctx, req)
+	if err != nil {
+		log.Printf("[vmhostd] exec sb=%s cmd=%q err=%v dur=%s", shortID(id), req.Msg.Cmd, err, time.Since(start).Round(time.Millisecond))
+		return nil, err
+	}
+	log.Printf("[vmhostd] exec sb=%s cmd=%q exit=%d dur=%s", shortID(id), req.Msg.Cmd, resp.Msg.ExitCode, time.Since(start).Round(time.Millisecond))
+	return resp, nil
 }
 
 // catalogSet / catalogDel 写 Redis 路由目录（可丢协调态，见 data-model.md）。
 func (s *server) catalogSet(ctx context.Context, id uuid.UUID, endpoint string) {
 	key := "sandbox:host:" + id.String()
 	if err := s.rdb.HSet(ctx, key, "host_id", s.cfg.HostID, "endpoint", endpoint).Err(); err != nil {
-		log.Printf("[vmhostd] catalog set %s: %v", id, err)
+		log.Printf("[vmhostd] catalog set sb=%s: %v", shortID(id), err)
 	}
 }
 
 func (s *server) catalogDel(ctx context.Context, id uuid.UUID) {
 	if err := s.rdb.Del(ctx, "sandbox:host:"+id.String()).Err(); err != nil {
-		log.Printf("[vmhostd] catalog del %s: %v", id, err)
+		log.Printf("[vmhostd] catalog del sb=%s: %v", shortID(id), err)
 	}
 }
 

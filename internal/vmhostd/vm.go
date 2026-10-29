@@ -110,7 +110,7 @@ func (s *server) bootVM(ctx context.Context, sandboxID uuid.UUID, a addrs, dir s
 	if err := fc.bootVM(ctx, s.cfg.Vmlinux, bootArgs, rootfs, "eth0", a.mac, a.tap); err != nil {
 		return err
 	}
-	log.Printf("[vmhostd] VM booted sandbox=%s ip=%s", sandboxID, a.guestIP)
+	log.Printf("[vmhostd] boot sb=%s ip=%s", shortID(sandboxID), a.guestIP)
 	return nil
 }
 
@@ -183,11 +183,11 @@ func (s *server) reconcile(ctx context.Context) error {
 		}
 		s.cleanupVM(dir, tap)
 		if err := s.pg.ReleaseSandbox(ctx, sb.ID); err != nil {
-			log.Printf("[vmhostd] reconcile %s: %v", sb.ID, err)
+			log.Printf("[vmhostd] reconcile sb=%s: %v", shortID(sb.ID), err)
 			continue
 		}
 		s.catalogDel(ctx, sb.ID)
-		log.Printf("[vmhostd] reconcile: %s → stopped", sb.ID)
+		log.Printf("[vmhostd] reconcile sb=%s → stopped", shortID(sb.ID))
 	}
 	return nil
 }
