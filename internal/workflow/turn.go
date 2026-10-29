@@ -3,13 +3,13 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
 
 	"ys-sandbox/internal/agent"
+	"ys-sandbox/internal/store/pg"
 )
 
 // TaskQueue ys-worker 监听的 Temporal task queue。
@@ -98,7 +98,7 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		}
 		history = append(history, agent.Message{Role: "assistant", Content: res.Text, ToolCalls: res.ToolCalls})
 		for _, tc := range res.ToolCalls {
-			callContent, _ := json.Marshal(map[string]string{"id": tc.ID, "name": tc.Name, "input": tc.Input})
+			callContent := pg.MarshalToolCall(tc.ID, tc.Name, tc.Input)
 			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
 				SessionID: in.SessionID, Kind: "tool_call", Content: callContent, TurnID: turnID,
 			}).Get(ctx, nil); err != nil {
@@ -112,9 +112,7 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 			}).Get(ctx, &out); err != nil {
 				out = fmt.Sprintf(`{"exit_code":-1,"stderr":"%s"}`, err)
 			}
-			resultContent, _ := json.Marshal(map[string]string{
-				"tool_call_id": tc.ID, "name": tc.Name, "output": out,
-			})
+			resultContent := pg.MarshalToolResult(tc.ID, tc.Name, out)
 			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
 				SessionID: in.SessionID, Kind: "tool_result", Content: resultContent, TurnID: turnID,
 			}).Get(ctx, nil); err != nil {

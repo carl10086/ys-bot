@@ -39,7 +39,7 @@ func (a *Activities) DrainQueue(ctx context.Context, sessionID string) ([]int64,
 	return out, nil
 }
 
-// LoadHistory 从 PG 读会话全部消息，映射为 agent 历史（M1：只有 user/assistant 两种 kind）。
+// LoadHistory 从 PG 读会话全部消息，投影为 agent 历史（映射规则见 history.go）。
 func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent.Message, error) {
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
@@ -49,45 +49,7 @@ func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent
 	if err != nil {
 		return nil, err
 	}
-	out := make([]agent.Message, 0, len(msgs))
-	for _, m := range msgs {
-		role := ""
-		switch m.Kind {
-		case pg.KindUser:
-			role = "user"
-		case pg.KindAssistant:
-			role = "assistant"
-		case pg.KindToolCall:
-			// {"id","name","input"} → assistant 携带的工具调用
-			var v struct {
-				ID, Name, Input string
-			}
-			if json.Unmarshal(m.Content, &v) == nil {
-				out = append(out, agent.Message{
-					Role:      "assistant",
-					ToolCalls: []agent.ToolCall{{ID: v.ID, Name: v.Name, Input: v.Input}},
-				})
-			}
-			continue
-		case pg.KindToolResult:
-			// {"tool_call_id","name","output"} → role=tool 消息
-			var v struct {
-				ToolCallID string `json:"tool_call_id"`
-				Name       string `json:"name"`
-				Output     string `json:"output"`
-			}
-			if json.Unmarshal(m.Content, &v) == nil {
-				out = append(out, agent.Message{
-					Role: "tool", ToolCallID: v.ToolCallID, Name: v.Name, Content: v.Output,
-				})
-			}
-			continue
-		default:
-			continue
-		}
-		out = append(out, agent.Message{Role: role, Content: extractText(m.Content)})
-	}
-	return out, nil
+	return projectHistory(msgs), nil
 }
 
 // shellTool M2 唯一工具（spec：先跑通架构，更多工具参考 envd/aider/codex 再加）。
@@ -172,7 +134,7 @@ func (a *Activities) WriteMessage(ctx context.Context, in WriteMessageInput) (in
 	}
 	content := in.Content
 	if content == nil {
-		content, _ = json.Marshal(map[string]string{"text": in.Text})
+		content = pg.MarshalText(in.Text)
 	}
 	seq, _, err := a.PG.InsertMessage(ctx, pg.Message{
 		SessionID: sid, Kind: in.Kind, Content: content, TurnID: in.TurnID,
@@ -186,15 +148,4 @@ func (a *Activities) PublishChanged(ctx context.Context, sessionID string) error
 
 func (a *Activities) ReleaseTurn(ctx context.Context, sessionID, workflowID string) error {
 	return a.Redis.ReleaseTurn(ctx, sessionID, workflowID)
-}
-
-// content jsonb 当前只有一种形状 {"text": "..."}；解析失败时原样返回。
-func extractText(content []byte) string {
-	var v struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(content, &v) == nil && v.Text != "" {
-		return v.Text
-	}
-	return string(content)
 }

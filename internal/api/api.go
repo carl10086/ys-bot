@@ -203,7 +203,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, _ := json.Marshal(map[string]string{"text": req.Text})
+	content := pg.MarshalText(req.Text)
 	seq, inserted, err := s.pg.InsertMessage(ctx, pg.Message{
 		SessionID: sid, Kind: pg.KindUser, Content: content, MsgID: &msgID,
 	})
