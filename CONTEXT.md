@@ -12,12 +12,17 @@
 | **sandbox**（沙箱） | agent 的"电脑"：一台 Firecracker microVM，**一用户一台**；会睡眠/快照/恢复 | PG `sandboxes` 表是它的档案卡；归属方向 sandbox → user |
 | **agentd** | VM 内的薄工具进程（shell/文件），经 Connect-RPC 被 server 调用 | M2 引入；VM 里**没有** agent loop 和凭证 |
 | **唤醒流水线** | 7 种唤醒源 → Router 去重 → 会话队列 → "值得说吗？"判断 | 讲座 10；v1 只有 web 消息一个源，管道形状按全量实现 |
+| **sleeping**（休眠态） | sandbox 状态之一：VM 已停机、快照在宿主盘上，可 resume 原地恢复 | M4 引入；区别于 `stopped`（什么都没了） |
+| **快照**（snapshot） | 休眠时落盘的 VM 易失状态：内存 + vCPU/设备状态；rootfs 磁盘本来就在盘上，不进快照 | 宿主本地文件；**优化不是事实源**，丢了降级 boot |
+| **resume**（原地恢复） | 从快照让 VM 回到休眠瞬间继续跑：同 slot 同 IP，进程与文件都在 | M4；触发点 = 下次 tool call 的懒恢复 |
+| **sweeper**（巡检） | 按固定间隔点火的休眠巡检，找出 sleep_after 过期的 awake sandbox 并逐个休眠 | M4；载体 = Temporal Schedule |
+| **last_activity_at** | sandbox 的"最近活动时间"：有任何活动就刷成 now()，距现在超过 N 才可休眠 | M4；语义是预测下次 tool call，不是 VM 使用记录 |
 
 ## 数据纪律
 
 | 术语 | 含义 |
 |---|---|
-| **事实源** | 丢了 = 事故的数据：业务 PG（sessions/messages/sandboxes）+ 文件存储（memory/skills/快照） |
+| **事实源** | 丢了 = 事故的数据：业务 PG（sessions/messages/sandboxes）+ 文件存储（memory/skills） |
 | **协调态** | 丢了可重建的数据，只放 Redis：会话队列 / turn 锁 / 变更信号。往 Redis 写永久数据是红线 |
 | **执行账本** | Temporal PG 里的 workflow 事件历史；应用不查，Temporal 自管 |
 
@@ -37,8 +42,9 @@
 |---|---|
 | 打断 | 1:1 消息不排队，CancelWorkflow 打断当前 turn 后合并队列开新 turn（讲座 17 用户特权） |
 | 批量 | 快速连续消息合并进一个 turn（"3 quick messages → 1 turn"） |
-| 懒恢复 | turn 启动 ≠ 唤醒 VM；首次 tool_call 前 EnsureVMAwake 才 Resume（M4） |
-| never mid-turn | 休眠只在 turn 间隙发生：turn 开始抑制计时、结束重新计时（M4 设计，已推迟） |
+| 懒恢复 | turn 启动 ≠ 唤醒 VM；首次 tool_call 前才 EnsureAwake（M4 定案 2026-10-30） |
+| never mid-turn | 休眠只在 VM 真正空闲时发生：活动刷新 `last_activity_at`，休眠器带过期条件 CAS 占坑，抢不到就放弃（M4 定案 2026-10-30） |
+| 降级 boot | resume 失败自动退回模板全新 boot——快照只是优化，会话状态在 PG，用户无感（M4 定案 2026-10-30） |
 | 每步落库 | turn 内 model/tool 每一步都写 `messages`（讲座 15 黑条） |
 
 ## 阶段语汇
