@@ -83,6 +83,29 @@ RETURNING id;
 UPDATE sandboxes SET status = $2 WHERE id = $1;
 
 -- name: ReleaseSandbox :exec
--- DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。
-UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL
+-- DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。M4：快照引用一并清。
+UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL, snapshot_ref = NULL
 WHERE id = $1;
+
+-- ===== M4 快照休眠（spec: 2026-10-30-m4-snapshot-sleep-design.md）=====
+
+-- name: RefreshSandboxActivity :exec
+-- 续期写入点（hitsend.Submit / workflow.ExecTool）：有任何活动就刷成 now()。
+UPDATE sandboxes SET last_activity_at = now() WHERE id = $1;
+
+-- name: ListSleepCandidates :many
+-- sweeper 全局扫描：过期（$1 分钟无活动）的 awake sandbox。跨宿主——路由信息在 host_id 里。
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE status = 'awake' AND last_activity_at < now() - $1::int * interval '1 minute';
+
+-- name: TryStartSleep :execrows
+-- 休眠入场券（never-mid-turn 的互斥核心）：检查与占坑同一原子操作。
+-- 0 行 = 刚有活动/别人在睡/非 awake → 放弃；1 行 = 抢到，可以动手休眠。
+UPDATE sandboxes SET status = 'sleeping'
+WHERE id = $1 AND status = 'awake'
+  AND last_activity_at < now() - $2::int * interval '1 minute';
+
+-- name: SetSandboxSnapshotRef :exec
+-- 休眠成功写快照路径；降级 boot / 销毁后清 NULL（NULL = 无快照可恢复）。
+UPDATE sandboxes SET snapshot_ref = $2 WHERE id = $1;

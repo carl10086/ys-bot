@@ -75,7 +75,7 @@ func (p *PG) ApplySchema(ctx context.Context) error {
 
 // ResetSchema 仅测试用：drop 后重建。
 func (p *PG) ResetSchema(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS messages, sessions"); err != nil {
+	if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS messages, sessions, sandboxes"); err != nil {
 		return err
 	}
 	return p.ApplySchema(ctx)
@@ -216,10 +216,12 @@ func (p *PG) InsertMessage(ctx context.Context, m Message) (seq int64, inserted 
 
 // ===== sandboxes（M2；data-model.md 2026-10-29 修订）=====
 
-// sandbox 状态机（M2 用子集：creating → awake → stopped；failed 异常路径）。
+// sandbox 状态机（M2 用子集：creating → awake → stopped；failed 异常路径；
+// M4 加 sleeping：VM 停机但快照在宿主盘上，可 resume）。
 const (
 	SandboxStatusCreating = "creating"
 	SandboxStatusAwake    = "awake"
+	SandboxStatusSleeping = "sleeping"
 	SandboxStatusStopped  = "stopped"
 	SandboxStatusFailed   = "failed"
 )
@@ -308,6 +310,42 @@ func (p *PG) SetSandboxStatus(ctx context.Context, id uuid.UUID, status string) 
 
 func (p *PG) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
 	return p.q.ReleaseSandbox(ctx, id)
+}
+
+// ===== M4 快照休眠 =====
+
+// RefreshSandboxActivity 续期写入点：有任何活动就把 last_activity_at 刷成 now()。
+func (p *PG) RefreshSandboxActivity(ctx context.Context, id uuid.UUID) error {
+	return p.q.RefreshSandboxActivity(ctx, id)
+}
+
+// ListSleepCandidates sweeper 全局扫描：idleMinutes 分钟无活动的 awake sandbox（跨宿主）。
+func (p *PG) ListSleepCandidates(ctx context.Context, idleMinutes int32) ([]Sandbox, error) {
+	rows, err := p.q.ListSleepCandidates(ctx, idleMinutes)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Sandbox, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt))
+	}
+	return out, nil
+}
+
+// TryStartSleep 休眠入场券（never-mid-turn 的互斥核心）：检查与占坑同一原子 UPDATE。
+// false = 刚有活动/已在睡/非 awake → 调用方放弃，下轮再说。
+func (p *PG) TryStartSleep(ctx context.Context, id uuid.UUID, idleMinutes int32) (bool, error) {
+	n, err := p.q.TryStartSleep(ctx, gen.TryStartSleepParams{ID: id, Column2: idleMinutes})
+	return n > 0, err
+}
+
+// SetSandboxSnapshotRef 写/清快照引用（ref=nil 清空；NULL = 无快照可恢复）。
+func (p *PG) SetSandboxSnapshotRef(ctx context.Context, id uuid.UUID, ref *string) error {
+	v := pgtype.Text{}
+	if ref != nil {
+		v = pgtype.Text{String: *ref, Valid: true}
+	}
+	return p.q.SetSandboxSnapshotRef(ctx, gen.SetSandboxSnapshotRefParams{ID: id, SnapshotRef: v})
 }
 
 func sandboxRow(id uuid.UUID, userID, hostID, status string, slot pgtype.Int4, vmIP pgtype.Text, createdAt pgtype.Timestamptz) Sandbox {

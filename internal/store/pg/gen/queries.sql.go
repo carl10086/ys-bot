@@ -369,6 +369,51 @@ func (q *Queries) ListSessionsByUser(ctx context.Context, userID string) ([]List
 	return items, nil
 }
 
+const listSleepCandidates = `-- name: ListSleepCandidates :many
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE status = 'awake' AND last_activity_at < now() - $1::int * interval '1 minute'
+`
+
+type ListSleepCandidatesRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+// sweeper 全局扫描：过期（$1 分钟无活动）的 awake sandbox。跨宿主——路由信息在 host_id 里。
+func (q *Queries) ListSleepCandidates(ctx context.Context, dollar_1 int32) ([]ListSleepCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listSleepCandidates, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSleepCandidatesRow
+	for rows.Next() {
+		var i ListSleepCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.HostID,
+			&i.Status,
+			&i.Slot,
+			&i.VmIp,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsedSlotsByHost = `-- name: ListUsedSlotsByHost :many
 SELECT slot FROM sandboxes WHERE host_id = $1 AND slot IS NOT NULL
 `
@@ -406,12 +451,24 @@ func (q *Queries) NextSeq(ctx context.Context, id uuid.UUID) (int64, error) {
 	return last_seq, err
 }
 
+const refreshSandboxActivity = `-- name: RefreshSandboxActivity :exec
+
+UPDATE sandboxes SET last_activity_at = now() WHERE id = $1
+`
+
+// ===== M4 快照休眠（spec: 2026-10-30-m4-snapshot-sleep-design.md）=====
+// 续期写入点（hitsend.Submit / workflow.ExecTool）：有任何活动就刷成 now()。
+func (q *Queries) RefreshSandboxActivity(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, refreshSandboxActivity, id)
+	return err
+}
+
 const releaseSandbox = `-- name: ReleaseSandbox :exec
-UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL
+UPDATE sandboxes SET status = 'stopped', slot = NULL, vm_ip = NULL, snapshot_ref = NULL
 WHERE id = $1
 `
 
-// DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。
+// DestroyVM / reconcile：释放 slot 与地址，行保留（历史可查）。M4：快照引用一并清。
 func (q *Queries) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, releaseSandbox, id)
 	return err
@@ -437,6 +494,21 @@ func (q *Queries) SetSandboxAwake(ctx context.Context, arg SetSandboxAwakeParams
 	return id, err
 }
 
+const setSandboxSnapshotRef = `-- name: SetSandboxSnapshotRef :exec
+UPDATE sandboxes SET snapshot_ref = $2 WHERE id = $1
+`
+
+type SetSandboxSnapshotRefParams struct {
+	ID          uuid.UUID
+	SnapshotRef pgtype.Text
+}
+
+// 休眠成功写快照路径；降级 boot / 销毁后清 NULL（NULL = 无快照可恢复）。
+func (q *Queries) SetSandboxSnapshotRef(ctx context.Context, arg SetSandboxSnapshotRefParams) error {
+	_, err := q.db.Exec(ctx, setSandboxSnapshotRef, arg.ID, arg.SnapshotRef)
+	return err
+}
+
 const setSandboxStatus = `-- name: SetSandboxStatus :exec
 UPDATE sandboxes SET status = $2 WHERE id = $1
 `
@@ -449,6 +521,27 @@ type SetSandboxStatusParams struct {
 func (q *Queries) SetSandboxStatus(ctx context.Context, arg SetSandboxStatusParams) error {
 	_, err := q.db.Exec(ctx, setSandboxStatus, arg.ID, arg.Status)
 	return err
+}
+
+const tryStartSleep = `-- name: TryStartSleep :execrows
+UPDATE sandboxes SET status = 'sleeping'
+WHERE id = $1 AND status = 'awake'
+  AND last_activity_at < now() - $2::int * interval '1 minute'
+`
+
+type TryStartSleepParams struct {
+	ID      uuid.UUID
+	Column2 int32
+}
+
+// 休眠入场券（never-mid-turn 的互斥核心）：检查与占坑同一原子操作。
+// 0 行 = 刚有活动/别人在睡/非 awake → 放弃；1 行 = 抢到，可以动手休眠。
+func (q *Queries) TryStartSleep(ctx context.Context, arg TryStartSleepParams) (int64, error) {
+	result, err := q.db.Exec(ctx, tryStartSleep, arg.ID, arg.Column2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSessionTitle = `-- name: UpdateSessionTitle :one
