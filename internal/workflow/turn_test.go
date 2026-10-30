@@ -1,7 +1,9 @@
 package workflow
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -85,10 +87,70 @@ func TestTurnWorkflow_LLMErrorStillReleasesLock(t *testing.T) {
 	env.AssertExpectations(t) // ReleaseTurn 必须被调到
 }
 
-// M2 工具 loop（spec §4 / plan T4）：
+// M4/T5：ExecTool 失败时 tool_result 的 content 必须是合法 JSON
+// （修复前用 Sprintf 拼接，stderr 含引号会生成非法 JSON）。
+func TestTurnWorkflow_ExecErrorProducesValidJSON(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&Activities{})
+
+	tc := agent.ToolCall{ID: "c1", Name: "shell", Input: `{"cmd":"ls"}`}
+	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
+	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
+		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
+		Return(agent.StepResult{Text: "命令失败了"}, nil).Once()
+	env.OnActivity("EnsureAwake", mock.Anything, "s1").Return("sb-1", nil)
+	// 测试环境默认带 activity 重试：失败会被多次调用，不能 Once()
+	env.OnActivity("ExecTool", mock.Anything, mock.Anything).
+		Return("", errors.New(`dial "10.200.0.2" refused`))
+	var toolResult json.RawMessage
+	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			in := args.Get(1).(WriteMessageInput)
+			if in.Kind == "tool_result" {
+				toolResult = in.Content
+			}
+		}).Return(int64(1), nil)
+	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow error: %v", err)
+	}
+	env.AssertExpectations(t)
+
+	if len(toolResult) == 0 {
+		t.Fatal("tool_result 未落库")
+	}
+	var parsed struct {
+		ToolCallID string `json:"tool_call_id"`
+		Output     string `json:"output"`
+	}
+	if err := json.Unmarshal(toolResult, &parsed); err != nil {
+		t.Fatalf("tool_result content 非法 JSON: %v\nraw: %s", err, toolResult)
+	}
+	var out struct {
+		ExitCode int    `json:"exit_code"`
+		Stderr   string `json:"stderr"`
+	}
+	if err := json.Unmarshal([]byte(parsed.Output), &out); err != nil {
+		t.Fatalf("tool_result output 非法 JSON: %v\nraw: %s", err, parsed.Output)
+	}
+	// activity 错误带包装前缀，断言包含原始文本即可（核心是 JSON 合法 + exit_code=-1）
+	if out.ExitCode != -1 || !strings.Contains(out.Stderr, `dial "10.200.0.2" refused`) {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
 // 模型先给 tool_calls → 懒唤醒一次 → 逐个执行（tool_call/tool_result 各落一条）
 // → 第二轮模型回文本收尾。
 
+// M2 工具 loop（spec §4 / plan T4）：
+// 模型先给 tool_calls → 懒唤醒一次 → 逐个执行（tool_call/tool_result 各落一条）
+// → 第二轮模型回文本收尾。
 func TestTurnWorkflow_ToolLoop(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()

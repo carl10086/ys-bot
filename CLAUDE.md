@@ -34,8 +34,8 @@ Go（单 module）· Temporal · PostgreSQL（业务事实源）· Redis（仅�
 - mock 驱动只是测试替身，不是日常开发回路
 - Temporal server、PostgreSQL、Redis 用 `deploy/` 的 docker-compose 起，不自建——**2026-10-30 起该 compose 部署在 152（/data/ys-infra/），Mac 不再跑本地实例**，地址见 .env / .run 配置
 - 集成测试指向 152 的测试专用资源（会 drop 重建，严禁指业务库）：
-  `YS_TEST_PG=...@152.136.212.59:15432/ys_sandbox_test YS_TEST_PG_API=...@.../ys_sandbox_test_api YS_TEST_PG_WF=...@.../ys_sandbox_test_wf YS_TEST_PG_HS=...@.../ys_sandbox_test_hs YS_TEST_REDIS=152.136.212.59:16379 REDIS_PASSWORD=... go test ./...`
-  （四个 PG 库分别归 store/pg、api、workflow、hitsend 包——go test 包间并行，共库 ResetSchema 必撞）
+  `YS_TEST_PG=...@152.136.212.59:15432/ys_sandbox_test YS_TEST_PG_API=...@.../ys_sandbox_test_api YS_TEST_PG_WF=...@.../ys_sandbox_test_wf YS_TEST_PG_HS=...@.../ys_sandbox_test_hs YS_TEST_PG_VD=...@.../ys_sandbox_test_vd YS_TEST_REDIS=152.136.212.59:16379 REDIS_PASSWORD=... go test ./...`
+  （五个 PG 库分别归 store/pg、api、workflow、hitsend、vmdriver 包——go test 包间并行，共库 ResetSchema 必撞）
 - **数据归属纪律**：业务事实源只写 PG / 文件存储；Redis 只放可丢的协调态（队列、幂等窗、锁、信号）——往 Redis 写"永久数据"是红线
 
 ## 参考源码

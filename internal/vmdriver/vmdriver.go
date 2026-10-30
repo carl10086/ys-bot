@@ -102,9 +102,20 @@ func (d *RemoteDriver) Exec(ctx context.Context, sandboxID uuid.UUID, cmd string
 	if err != nil {
 		return 0, "", "", err
 	}
-	req := connect.NewRequest(&agentdv1.ExecRequest{Cmd: cmd, TimeoutSec: timeoutSec})
-	req.Header().Set("X-Sandbox-Id", sandboxID.String())
-	resp, err := c.Exec(ctx, req)
+	exec := func() (*connect.Response[agentdv1.ExecResponse], error) {
+		req := connect.NewRequest(&agentdv1.ExecRequest{Cmd: cmd, TimeoutSec: timeoutSec})
+		req.Header().Set("X-Sandbox-Id", sandboxID.String())
+		return c.Exec(ctx, req)
+	}
+	resp, err := exec()
+	// M4 自愈（spec Q2）：VM 非 awake（休眠竞态的残余窗口）→ EnsureVM（resume）→ 重试一次。
+	// 最多一次：再失败说明不是休眠竞态，直接报错。
+	if cerr := new(connect.Error); errors.As(err, &cerr) && cerr.Code() == connect.CodeFailedPrecondition {
+		if _, err := c.EnsureVM(ctx, connect.NewRequest(&vmhostdv1.EnsureVMRequest{SandboxId: sb.ID.String()})); err != nil {
+			return 0, "", "", fmt.Errorf("自愈 EnsureVM: %w", err)
+		}
+		resp, err = exec()
+	}
 	if err != nil {
 		return 0, "", "", err
 	}

@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -117,7 +118,10 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 			if err := workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
 				SandboxID: sandboxID, Name: tc.Name, Input: tc.Input,
 			}).Get(ctx, &out); err != nil {
-				out = fmt.Sprintf(`{"exit_code":-1,"stderr":"%s"}`, err)
+				// 工具执行失败也落库（exit_code=-1），让模型看到错误继续决策。
+				// 必须 json.Marshal——stderr 含引号/换行时 Sprintf 会拼出非法 JSON。
+				b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": err.Error()})
+				out = string(b)
 			}
 			if err := writeAndSignal(WriteMessageInput{
 				SessionID: in.SessionID, Kind: "tool_result",
