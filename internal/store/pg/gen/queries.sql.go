@@ -502,9 +502,21 @@ UPDATE sandboxes SET last_activity_at = now() WHERE id = $1
 `
 
 // ===== M4 快照休眠（spec: 2026-10-30-m4-snapshot-sleep-design.md）=====
-// 续期写入点（hitsend.Submit / workflow.ExecTool）：有任何活动就刷成 now()。
+// 续期写入点（workflow.ExecTool）：有任何活动就刷成 now()。
 func (q *Queries) RefreshSandboxActivity(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, refreshSandboxActivity, id)
+	return err
+}
+
+const refreshSandboxActivityBySession = `-- name: RefreshSandboxActivityBySession :exec
+UPDATE sandboxes SET last_activity_at = now()
+WHERE user_id = (SELECT user_id FROM sessions WHERE sessions.id = $1)
+`
+
+// 续期写入点（hitsend.Submit）：session → user → sandbox 一跳完成。
+// 无 sandbox 行（从未用过 VM）= 0 行更新，无害。
+func (q *Queries) RefreshSandboxActivityBySession(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, refreshSandboxActivityBySession, id)
 	return err
 }
 

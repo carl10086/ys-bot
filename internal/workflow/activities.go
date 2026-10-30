@@ -113,6 +113,10 @@ func (a *Activities) ExecTool(ctx context.Context, in ExecToolInput) (string, er
 	if err := json.Unmarshal([]byte(in.Input), &args); err != nil || args.Cmd == "" {
 		return "", fmt.Errorf("shell 工具参数非法: %s", in.Input)
 	}
+	// M4 续期：工具在执行 = VM 在干活。长命令期间持续续期是 never-mid-turn 的前提
+	// （spec Q2 硬约束：休眠阈值 N > 单工具 timeout）。
+	// 失败忽略：续期是优化，不能挡住工具执行。
+	_ = a.PG.RefreshSandboxActivity(ctx, sbID)
 	code, stdout, stderr, err := a.Driver.Exec(ctx, sbID, args.Cmd, 60)
 	if err != nil {
 		return "", err

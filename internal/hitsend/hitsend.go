@@ -40,6 +40,9 @@ func (s *Service) Submit(ctx context.Context, sessionID, msgID uuid.UUID, text s
 	if err != nil {
 		return 0, false, err
 	}
+	// M4 续期：用户发消息 = 会话活跃（含 deduped 重发——用户确实按了发送）。
+	// 失败只记日志级忽略：续期是优化，不能挡住发消息主链路。
+	_ = s.PG.RefreshSandboxActivityBySession(ctx, sessionID)
 	if !inserted {
 		return seq, true, nil
 	}

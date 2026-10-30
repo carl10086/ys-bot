@@ -314,9 +314,14 @@ func (p *PG) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
 
 // ===== M4 快照休眠 =====
 
-// RefreshSandboxActivity 续期写入点：有任何活动就把 last_activity_at 刷成 now()。
+// RefreshSandboxActivity 续期写入点（ExecTool）：有任何活动就把 last_activity_at 刷成 now()。
 func (p *PG) RefreshSandboxActivity(ctx context.Context, id uuid.UUID) error {
 	return p.q.RefreshSandboxActivity(ctx, id)
+}
+
+// RefreshSandboxActivityBySession 续期写入点（hitsend.Submit）：session→user→sandbox 一跳完成。
+func (p *PG) RefreshSandboxActivityBySession(ctx context.Context, sessionID uuid.UUID) error {
+	return p.q.RefreshSandboxActivityBySession(ctx, sessionID)
 }
 
 // ListSleepCandidates sweeper 全局扫描：idleMinutes 分钟无活动的 awake sandbox（跨宿主）。

@@ -90,8 +90,14 @@ WHERE id = $1;
 -- ===== M4 快照休眠（spec: 2026-10-30-m4-snapshot-sleep-design.md）=====
 
 -- name: RefreshSandboxActivity :exec
--- 续期写入点（hitsend.Submit / workflow.ExecTool）：有任何活动就刷成 now()。
+-- 续期写入点（workflow.ExecTool）：有任何活动就刷成 now()。
 UPDATE sandboxes SET last_activity_at = now() WHERE id = $1;
+
+-- name: RefreshSandboxActivityBySession :exec
+-- 续期写入点（hitsend.Submit）：session → user → sandbox 一跳完成。
+-- 无 sandbox 行（从未用过 VM）= 0 行更新，无害。
+UPDATE sandboxes SET last_activity_at = now()
+WHERE user_id = (SELECT user_id FROM sessions WHERE sessions.id = $1);
 
 -- name: ListSleepCandidates :many
 -- sweeper 全局扫描：过期（$1 分钟无活动）的 awake sandbox。跨宿主——路由信息在 host_id 里。
