@@ -16,16 +16,15 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 
 	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
 	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
 	vmhostdv1 "ys-sandbox/internal/gen/vmhostd/v1"
 	"ys-sandbox/internal/gen/vmhostd/v1/vmhostdv1connect"
 	"ys-sandbox/internal/store/pg"
+	"ys-sandbox/internal/store/redis"
 )
-
-var errNotFound = pg.ErrNotFound
 
 // Config vmhostd 运行配置（env 注入）。
 type Config struct {
@@ -47,7 +46,7 @@ func NewMux(ctx context.Context, cfg Config) (*http.ServeMux, error) {
 	if err != nil {
 		return nil, err
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
+	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
 	s := &server{cfg: cfg, pg: db, rdb: rdb, httpClient: http.DefaultClient}
 	if err := s.reconcile(ctx); err != nil {
 		return nil, fmt.Errorf("reconcile: %w", err)
@@ -62,7 +61,7 @@ func NewMux(ctx context.Context, cfg Config) (*http.ServeMux, error) {
 type server struct {
 	cfg        Config
 	pg         *pg.PG
-	rdb        *redis.Client
+	rdb        *goredis.Client
 	httpClient *http.Client
 }
 
@@ -152,10 +151,11 @@ func (s *server) Exec(ctx context.Context, req *connect.Request[agentdv1.ExecReq
 }
 
 // heartbeatLoop 每 10s 续一次 TTL=30s 的存活 key；进程死了 key 自动消失（穷人版注册中心）。
+// key/field 形状归 store/redis 管（读方是 vmdriver）。
 func (s *server) heartbeatLoop(ctx context.Context) {
-	key := "vmhost:alive:" + s.cfg.HostID
+	key := redis.VmhostAliveKey(s.cfg.HostID)
 	tick := func() {
-		if err := s.rdb.HSet(ctx, key, "endpoint", s.cfg.AdvertiseAddr, "ts", time.Now().Unix()).Err(); err == nil {
+		if err := s.rdb.HSet(ctx, key, redis.VmhostEndpointField, s.cfg.AdvertiseAddr, "ts", time.Now().Unix()).Err(); err == nil {
 			s.rdb.Expire(ctx, key, 30*time.Second)
 		}
 	}

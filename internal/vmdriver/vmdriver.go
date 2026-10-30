@@ -12,12 +12,13 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 
 	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
 	vmhostdv1 "ys-sandbox/internal/gen/vmhostd/v1"
 	"ys-sandbox/internal/gen/vmhostd/v1/vmhostdv1connect"
 	"ys-sandbox/internal/store/pg"
+	"ys-sandbox/internal/store/redis"
 )
 
 // Driver worker 侧接口（实现可换：Remote / mock）。
@@ -29,10 +30,10 @@ type Driver interface {
 	Exec(ctx context.Context, sandboxID uuid.UUID, cmd string, timeoutSec uint32) (exitCode int32, stdout, stderr string, err error)
 }
 
-// RemoteDriver 经 Redis catalog 发现 vmhostd，转发一切调用。
+// RemoteDriver 经 Redis 注册表发现 vmhostd，转发一切调用。
 type RemoteDriver struct {
 	PG    *pg.PG
-	Redis *redis.Client
+	Redis *goredis.Client
 	HTTP  *http.Client // nil → http.DefaultClient
 }
 
@@ -43,10 +44,9 @@ func (d *RemoteDriver) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-// vmhostClient 按 hostID 从 catalog 查 vmhostd 地址。
-// 心跳 key：`vmhost:alive:{host_id}`（HASH，field endpoint）。
+// vmhostClient 按 hostID 从注册表查 vmhostd 地址（key 形状归 store/redis 管）。
 func (d *RemoteDriver) vmhostClient(ctx context.Context, hostID string) (vmhostdv1connect.VmhostdClient, error) {
-	addr, err := d.Redis.HGet(ctx, "vmhost:alive:"+hostID, "endpoint").Result()
+	addr, err := d.Redis.HGet(ctx, redis.VmhostAliveKey(hostID), redis.VmhostEndpointField).Result()
 	if err != nil {
 		return nil, fmt.Errorf("vmhostd 不在线（host=%s）: %w", hostID, err)
 	}
@@ -55,14 +55,14 @@ func (d *RemoteDriver) vmhostClient(ctx context.Context, hostID string) (vmhostd
 
 // pickHost 选宿主：任一在线 vmhostd（M2 单宿主；多宿主的调度策略 M3 再议）。
 func (d *RemoteDriver) pickHost(ctx context.Context) (string, error) {
-	keys, err := d.Redis.Keys(ctx, "vmhost:alive:*").Result()
+	keys, err := d.Redis.Keys(ctx, redis.VmhostAlivePrefix+"*").Result()
 	if err != nil {
 		return "", err
 	}
 	if len(keys) == 0 {
 		return "", errors.New("没有在线的 vmhostd")
 	}
-	return strings.TrimPrefix(keys[0], "vmhost:alive:"), nil
+	return strings.TrimPrefix(keys[0], redis.VmhostAlivePrefix), nil
 }
 
 func (d *RemoteDriver) EnsureAwake(ctx context.Context, userID string) (uuid.UUID, error) {

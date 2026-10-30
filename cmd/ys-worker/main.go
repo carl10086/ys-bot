@@ -13,8 +13,6 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
-	goredis "github.com/redis/go-redis/v9"
-
 	"ys-sandbox/internal/agent"
 	"ys-sandbox/internal/store/pg"
 	"ys-sandbox/internal/store/redis"
@@ -68,10 +66,7 @@ func main() {
 	// VM 工具环境（M2）：VM_DRIVER=remote 时启用；缺省无 Driver = M1 纯对话行为。
 	var drv vmdriver.Driver
 	if os.Getenv("VM_DRIVER") == "remote" {
-		drv = &vmdriver.RemoteDriver{PG: pgStore, Redis: goredis.NewClient(&goredis.Options{
-			Addr:     envOr("REDIS_ADDR", "localhost:6379"),
-			Password: envOr("REDIS_PASSWORD", ""),
-		})}
+		drv = &vmdriver.RemoteDriver{PG: pgStore, Redis: rdb.Client()} // 复用同一连接
 		log.Print("VM_DRIVER=remote，shell 工具已启用")
 	}
 	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv})

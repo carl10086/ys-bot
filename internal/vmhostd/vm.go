@@ -20,6 +20,7 @@ import (
 
 	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
 	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
+	"ys-sandbox/internal/store/pg"
 )
 
 // agentdReadyTimeout 起 VM 后等 agentd health 的最长时间。
@@ -132,7 +133,7 @@ func (s *server) waitAgentd(ctx context.Context, endpoint string) error {
 // destroyVM 杀进程、拆 tap、删目录、释放 slot（PG）。幂等。
 func (s *server) destroyVM(ctx context.Context, sandboxID uuid.UUID) error {
 	sb, err := s.pg.GetSandboxByID(ctx, sandboxID)
-	if errors.Is(err, errNotFound) {
+	if errors.Is(err, pg.ErrNotFound) {
 		return nil
 	}
 	if err != nil {

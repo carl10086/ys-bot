@@ -48,6 +48,11 @@ func (s *Server) WithStatic(fsys fs.FS) *Server {
 	return s
 }
 
+// sessionJSON 会话的响应 DTO（create/get/rename 同一形状）。
+func sessionJSON(s pg.Session) map[string]string {
+	return map[string]string{"id": s.ID.String(), "user_id": s.UserID, "title": s.Title}
+}
+
 type createSessionRequest struct {
 	UserID string `json:"user_id"` // 空则用 server 默认值
 	Title  string `json:"title"`
@@ -69,7 +74,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+	writeJSON(w, sessionJSON(sess))
 }
 
 // getSession SPA 刷新后恢复展示（title/user_id），也用于校验 localStorage 里的 id 是否还有效。
@@ -88,7 +93,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+	writeJSON(w, sessionJSON(sess))
 }
 
 // listSessions SPA 侧栏会话列表：?user_id= 缺省用 server 默认用户；最近活跃倒序。
@@ -139,7 +144,7 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"id": sess.ID.String(), "user_id": sess.UserID, "title": sess.Title})
+	writeJSON(w, sessionJSON(sess))
 }
 
 // deleteSession 删会话连同消息历史（SPA 侧栏删除）。

@@ -16,7 +16,7 @@ Go（单 module）· Temporal · PostgreSQL（业务事实源）· Redis（仅�
 - 二进制在 `cmd/<name>/`，业务代码全在 `internal/`
 - **不建 `pkg/`**——除非出现真实的外部 import 需求
 - **不拆多 module（go.work）**——除非某个组件需要独立发版
-- `internal/vmdriver/`：接口（`driver.go`）与实现（`firecracker/`、`mock/`）分目录；新增驱动走同一接口
+- `internal/vmdriver/`：`Driver` 接口 + 实现。当前只有 `RemoteDriver` 一个实现（单文件 vmdriver.go），出现第二个实现再分目录；测试替身（fakeDriver）写在各包的 `_test.go` 里，不进非测试代码
 - `internal/agent/`：fantasy 必须关在适配接口后面，业务代码不得直接 import fantasy 类型
 - agentd 协议改 `proto/agentd/*.proto` 后必须重跑 `buf generate`（产物在 `internal/gen/`，不手改）
 

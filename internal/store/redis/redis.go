@@ -9,10 +9,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Redis 协调态三结构（data-model.md）：
+// Redis 协调态结构（data-model.md）：
 //   session:{id}:queue        LIST   会话队列，turn 开始时 drain 成一批
 //   session:{id}:active_turn  STRING SET NX EX 600，值 = workflowID
 //   changed:{session}         Pub/Sub "something changed" 空信号
+//   vmhost:alive:{host_id}    HASH   vmhostd 存活注册表（见 VmhostAliveKey）
 type Redis struct {
 	client *redis.Client
 }
@@ -26,6 +27,21 @@ func NewRedis(addr, password string, db int) (*Redis, error) {
 }
 
 func (r *Redis) Close() { r.client.Close() }
+
+// Client 暴露底层 go-redis client：需要 wrapper 没封装的协调原语时用
+// （如 vmdriver 查 vmhost 注册表），避免调用方按同一份配置重复建连。
+func (r *Redis) Client() *redis.Client { return r.client }
+
+// vmhost 存活注册表（穷人版注册中心）：
+// key = vmhost:alive:{host_id}（HASH，field endpoint = vmhostd 地址），TTL 由写方续。
+// 写方 vmhostd heartbeatLoop、读方 vmdriver 跨进程共享这个形状——只允许在这里定义。
+const VmhostAlivePrefix = "vmhost:alive:"
+
+// VmhostEndpointField VmhostAliveKey HASH 里存 vmhostd 地址的 field 名。
+const VmhostEndpointField = "endpoint"
+
+// VmhostAliveKey 某宿主的存活 key（TTL 内存在 = vmhostd 在线）。
+func VmhostAliveKey(hostID string) string { return VmhostAlivePrefix + hostID }
 
 // Queue 一个会话的消息队列。payload 是消息在 PG 里的 seq（消息已先落 PG，队列可丢）。
 type Queue struct {
