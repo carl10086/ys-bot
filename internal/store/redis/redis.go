@@ -10,10 +10,11 @@ import (
 )
 
 // Redis 协调态结构（data-model.md）：
-//   session:{id}:queue        LIST   会话队列，turn 开始时 drain 成一批
-//   session:{id}:active_turn  STRING SET NX EX 600，值 = workflowID
-//   changed:{session}         Pub/Sub "something changed" 空信号
-//   vmhost:alive:{host_id}    HASH   vmhostd 存活注册表（见 VmhostAliveKey）
+//
+//	session:{id}:queue        LIST   会话队列，turn 开始时 drain 成一批
+//	session:{id}:active_turn  STRING SET NX EX 600，值 = workflowID
+//	changed:{session}         Pub/Sub "something changed" 空信号
+//	vmhost:alive:{host_id}    HASH   vmhostd 存活注册表（见 VmhostAliveKey）
 type Redis struct {
 	client *redis.Client
 }
@@ -50,7 +51,7 @@ type Queue struct {
 
 func (q Queue) key() string { return fmt.Sprintf("session:%s:queue", q.SessionID) }
 
-func turnKey(sessionID string) string  { return fmt.Sprintf("session:%s:active_turn", sessionID) }
+func turnKey(sessionID string) string    { return fmt.Sprintf("session:%s:active_turn", sessionID) }
 func changedKey(sessionID string) string { return fmt.Sprintf("changed:%s", sessionID) }
 
 func (r *Redis) PushMessage(ctx context.Context, q Queue, payload string) error {

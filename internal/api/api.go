@@ -20,11 +20,11 @@ import (
 )
 
 type Server struct {
-	pg      *pg.PG
-	redis   *redis.Redis
-	svc     *hitsend.Service
-	userID  string // v1 常量 "local"
-	mux     *http.ServeMux
+	pg     *pg.PG
+	redis  *redis.Redis
+	svc    *hitsend.Service
+	userID string // v1 常量 "local"
+	mux    *http.ServeMux
 }
 
 func New(p *pg.PG, r *redis.Redis, svc *hitsend.Service, userID string) *Server {

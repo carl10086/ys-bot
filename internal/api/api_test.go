@@ -388,4 +388,3 @@ func getMessages(t *testing.T, srv *httptest.Server, sid string, afterSeq int64)
 	}
 	return out.Messages
 }
-
