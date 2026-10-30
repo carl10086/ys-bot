@@ -65,6 +65,14 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 	// （首个 tool_call 前懒唤醒 VM → 逐个执行 → 每步落库 + 发信号 → 继续）。
 	sandboxID := ""
 	var lastSeq int64
+	// writeAndSignal 落一条消息并发空信号（信号失败无害：丢了 SPA 下次还会被戳）。
+	writeAndSignal := func(in WriteMessageInput) error {
+		if err := workflow.ExecuteActivity(ctx, "WriteMessage", in).Get(ctx, nil); err != nil {
+			return err
+		}
+		_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
+		return nil
+	}
 	for step := 0; ; step++ {
 		var res agent.StepResult
 		if err := workflow.ExecuteActivity(ctx, "CallLLM", history).Get(ctx, &res); err != nil {
@@ -98,13 +106,12 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		}
 		history = append(history, agent.Message{Role: "assistant", Content: res.Text, ToolCalls: res.ToolCalls})
 		for _, tc := range res.ToolCalls {
-			callContent := pg.MarshalToolCall(tc.ID, tc.Name, tc.Input)
-			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
-				SessionID: in.SessionID, Kind: "tool_call", Content: callContent, TurnID: turnID,
-			}).Get(ctx, nil); err != nil {
+			if err := writeAndSignal(WriteMessageInput{
+				SessionID: in.SessionID, Kind: "tool_call",
+				Content: pg.MarshalToolCall(tc.ID, tc.Name, tc.Input), TurnID: turnID,
+			}); err != nil {
 				return fmt.Errorf("write tool_call: %w", err)
 			}
-			_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
 
 			var out string
 			if err := workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
@@ -112,13 +119,12 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 			}).Get(ctx, &out); err != nil {
 				out = fmt.Sprintf(`{"exit_code":-1,"stderr":"%s"}`, err)
 			}
-			resultContent := pg.MarshalToolResult(tc.ID, tc.Name, out)
-			if err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
-				SessionID: in.SessionID, Kind: "tool_result", Content: resultContent, TurnID: turnID,
-			}).Get(ctx, nil); err != nil {
+			if err := writeAndSignal(WriteMessageInput{
+				SessionID: in.SessionID, Kind: "tool_result",
+				Content: pg.MarshalToolResult(tc.ID, tc.Name, out), TurnID: turnID,
+			}); err != nil {
 				return fmt.Errorf("write tool_result: %w", err)
 			}
-			_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
 			history = append(history, agent.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Name, Content: out})
 		}
 	}

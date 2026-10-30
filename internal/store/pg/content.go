@@ -6,63 +6,66 @@ package pg
 
 import "encoding/json"
 
-// MarshalText user/assistant 文本消息的 content：{"text": "..."}。
+// 三种 content 形状各一个 struct，marshal/unmarshal 共用（字段改动只动一处）。
+
+// textContent user/assistant 文本消息：{"text": "..."}。
+type textContent struct {
+	Text string `json:"text"`
+}
+
+// toolCallContent kind=tool_call：{"id","name","input"}。
+type toolCallContent struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input string `json:"input"`
+}
+
+// toolResultContent kind=tool_result：{"tool_call_id","name","output"}。
+type toolResultContent struct {
+	ToolCallID string `json:"tool_call_id"`
+	Name       string `json:"name"`
+	Output     string `json:"output"`
+}
+
+// MarshalText user/assistant 文本消息的 content。
 func MarshalText(text string) []byte {
-	b, _ := json.Marshal(map[string]string{"text": text})
+	b, _ := json.Marshal(textContent{Text: text})
 	return b
 }
 
 // ParseText 解析 {"text": "..."}；形状不符（含空 text）原样返回 content 字符串。
 func ParseText(content []byte) string {
-	var v struct {
-		Text string `json:"text"`
-	}
+	var v textContent
 	if json.Unmarshal(content, &v) == nil && v.Text != "" {
 		return v.Text
 	}
 	return string(content)
 }
 
-// MarshalToolCall kind=tool_call 的 content：{"id","name","input"}。
+// MarshalToolCall kind=tool_call 的 content。
 func MarshalToolCall(id, name, input string) []byte {
-	b, _ := json.Marshal(struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Input string `json:"input"`
-	}{id, name, input})
+	b, _ := json.Marshal(toolCallContent{id, name, input})
 	return b
 }
 
 // ParseToolCall 是 MarshalToolCall 的逆；json 解析失败返回 ok=false（调用方跳过该行）。
 func ParseToolCall(content []byte) (id, name, input string, ok bool) {
-	var v struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Input string `json:"input"`
-	}
+	var v toolCallContent
 	if json.Unmarshal(content, &v) != nil {
 		return "", "", "", false
 	}
 	return v.ID, v.Name, v.Input, true
 }
 
-// MarshalToolResult kind=tool_result 的 content：{"tool_call_id","name","output"}。
+// MarshalToolResult kind=tool_result 的 content。
 func MarshalToolResult(callID, name, output string) []byte {
-	b, _ := json.Marshal(struct {
-		ToolCallID string `json:"tool_call_id"`
-		Name       string `json:"name"`
-		Output     string `json:"output"`
-	}{callID, name, output})
+	b, _ := json.Marshal(toolResultContent{callID, name, output})
 	return b
 }
 
 // ParseToolResult 是 MarshalToolResult 的逆；json 解析失败返回 ok=false（调用方跳过该行）。
 func ParseToolResult(content []byte) (callID, name, output string, ok bool) {
-	var v struct {
-		ToolCallID string `json:"tool_call_id"`
-		Name       string `json:"name"`
-		Output     string `json:"output"`
-	}
+	var v toolResultContent
 	if json.Unmarshal(content, &v) != nil {
 		return "", "", "", false
 	}

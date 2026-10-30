@@ -78,10 +78,19 @@ func shortID(id uuid.UUID) string {
 	return s
 }
 
-func (s *server) EnsureVM(ctx context.Context, req *connect.Request[vmhostdv1.EnsureVMRequest]) (*connect.Response[vmhostdv1.EnsureVMResponse], error) {
-	id, err := uuid.Parse(req.Msg.SandboxId)
+// parseSandboxID 解析请求里的 sandbox id；非法时返回 InvalidArgument。
+func parseSandboxID(raw string) (uuid.UUID, error) {
+	id, err := uuid.Parse(raw)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return uuid.Nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return id, nil
+}
+
+func (s *server) EnsureVM(ctx context.Context, req *connect.Request[vmhostdv1.EnsureVMRequest]) (*connect.Response[vmhostdv1.EnsureVMResponse], error) {
+	id, err := parseSandboxID(req.Msg.SandboxId)
+	if err != nil {
+		return nil, err
 	}
 	start := time.Now()
 	endpoint, err := s.ensureVM(ctx, id)
@@ -95,9 +104,9 @@ func (s *server) EnsureVM(ctx context.Context, req *connect.Request[vmhostdv1.En
 }
 
 func (s *server) DestroyVM(ctx context.Context, req *connect.Request[vmhostdv1.DestroyVMRequest]) (*connect.Response[vmhostdv1.DestroyVMResponse], error) {
-	id, err := uuid.Parse(req.Msg.SandboxId)
+	id, err := parseSandboxID(req.Msg.SandboxId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, err
 	}
 	start := time.Now()
 	if err := s.destroyVM(ctx, id); err != nil {
@@ -109,9 +118,9 @@ func (s *server) DestroyVM(ctx context.Context, req *connect.Request[vmhostdv1.D
 }
 
 func (s *server) StatusVM(ctx context.Context, req *connect.Request[vmhostdv1.StatusVMRequest]) (*connect.Response[vmhostdv1.StatusVMResponse], error) {
-	id, err := uuid.Parse(req.Msg.SandboxId)
+	id, err := parseSandboxID(req.Msg.SandboxId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, err
 	}
 	sb, err := s.pg.GetSandboxByID(ctx, id)
 	if errors.Is(err, pg.ErrNotFound) {

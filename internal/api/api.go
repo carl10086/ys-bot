@@ -53,6 +53,16 @@ func sessionJSON(s pg.Session) map[string]string {
 	return map[string]string{"id": s.ID.String(), "user_id": s.UserID, "title": s.Title}
 }
 
+// pathUUID 解析路径里的会话 id；非法时写 400 并返回 ok=false。
+func pathUUID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 type createSessionRequest struct {
 	UserID string `json:"user_id"` // 空则用 server 默认值
 	Title  string `json:"title"`
@@ -79,9 +89,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 
 // getSession SPA 刷新后恢复展示（title/user_id），也用于校验 localStorage 里的 id 是否还有效。
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
-	sid, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+	sid, ok := pathUUID(w, r)
+	if !ok {
 		return
 	}
 	sess, err := s.pg.GetSession(r.Context(), sid)
@@ -125,9 +134,8 @@ type renameRequest struct {
 
 // renameSession SPA 手动改名（也供首条消息自动命名复用 store 层）。
 func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) {
-	sid, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+	sid, ok := pathUUID(w, r)
+	if !ok {
 		return
 	}
 	var req renameRequest
@@ -149,9 +157,8 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) {
 
 // deleteSession 删会话连同消息历史（SPA 侧栏删除）。
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	sid, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+	sid, ok := pathUUID(w, r)
+	if !ok {
 		return
 	}
 	if err := s.pg.DeleteSession(r.Context(), sid); err != nil {
@@ -169,9 +176,8 @@ type sendRequest struct {
 // sendMessage hit-send 协议的 HTTP 适配：解析 → hitsend.Submit → 响应。
 // 协议本体（幂等/入队/打断/起 turn 的顺序铁律）在 hitsend 包。
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
-	sid, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+	sid, ok := pathUUID(w, r)
+	if !ok {
 		return
 	}
 	var req sendRequest
@@ -193,9 +199,8 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
-	sid, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, fmt.Errorf("bad session id"), http.StatusBadRequest)
+	sid, ok := pathUUID(w, r)
+	if !ok {
 		return
 	}
 	afterSeq, _ := strconv.ParseInt(r.URL.Query().Get("after_seq"), 10, 64)
