@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 
 	"ys-sandbox/internal/agent"
@@ -75,7 +76,7 @@ func main() {
 		log.Print("VM_DRIVER=remote，shell 工具已启用")
 		ensureSleepSchedule(ctx, c, envInt("SLEEP_IDLE_MINUTES", 10))
 	}
-	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv})
+	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv, TC: c})
 
 	log.Printf("listening on task queue %q", workflow.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
@@ -104,7 +105,7 @@ func ensureSleepSchedule(ctx context.Context, c client.Client, idleMinutes int) 
 	switch {
 	case err == nil:
 		log.Printf("sleep sweeper 已注册（interval=1min, idle=%dmin）", idleMinutes)
-	case errors.As(err, &alreadyExists):
+	case errors.As(err, &alreadyExists) || errors.Is(err, temporal.ErrScheduleAlreadyRunning):
 		log.Printf("sleep sweeper 已存在，跳过注册")
 	default:
 		log.Printf("sleep sweeper 注册失败（休眠功能不可用，turn 不受影响）: %v", err)

@@ -1,6 +1,11 @@
 // M4 快照休眠（spec: docs/ys-powers/specs/2026-10-30-m4-snapshot-sleep-design.md）。
 // SleepSweepWorkflow：Temporal Schedule 每分钟点火，扫出过期 awake sandbox，逐个起 SleepWorkflow。
 // SleepWorkflow：CAS 占坑（never-mid-turn 互斥核心）→ vmhostd SleepVM → 失败回滚 awake。
+//
+// 注意：SleepWorkflow 的启动走 activity 里的 client.ExecuteWorkflow，不用 child workflow——
+// 实测（2026-10-30 e2e）：父 workflow 在同一 workflow task 里"发起 child + 立即完成"时，
+// child 在 server 侧从未真正创建（Initiated 事件有，Started/Failed 都没有，Describe 查无此行）。
+// client 启动与 hitsend 起 turn 同一模式，可靠且错误可见。
 package workflow
 
 import (
@@ -22,20 +27,18 @@ type SleepInput struct {
 }
 
 // SleepSweepWorkflow 全局扫描（跨宿主；路由信息在 sandbox.host_id 里，SleepVM 经 vmdriver 解析）。
-// 每个候选起一个 child SleepWorkflow（workflowID = sleep:<id>，Temporal 按 ID 去重并发）。
 func SleepSweepWorkflow(ctx workflow.Context, in SleepSweepInput) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 30 * time.Second})
 	var ids []string
 	if err := workflow.ExecuteActivity(ctx, "ListSleepCandidates", in.IdleMinutes).Get(ctx, &ids); err != nil {
 		return fmt.Errorf("list sleep candidates: %w", err)
 	}
-	logger := workflow.GetLogger(ctx)
-	for _, id := range ids {
-		cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "sleep:" + id})
-		// 不等待结果：休眠是尽力而为，单个失败不挡其他；错误在 child 自己的历史里
-		workflow.ExecuteChildWorkflow(cctx, SleepWorkflow, SleepInput{SandboxID: id, IdleMinutes: in.IdleMinutes})
+	if len(ids) > 0 {
+		if err := workflow.ExecuteActivity(ctx, "StartSleepWorkflows", ids, in.IdleMinutes).Get(ctx, nil); err != nil {
+			return fmt.Errorf("start sleep workflows: %w", err)
+		}
 	}
-	logger.Info("sleep sweep done", "candidates", len(ids))
+	workflow.GetLogger(ctx).Info("sleep sweep done", "candidates", len(ids))
 	return nil
 }
 

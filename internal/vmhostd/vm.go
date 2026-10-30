@@ -203,7 +203,8 @@ func (s *server) resumeVM(ctx context.Context, sb pg.Sandbox, dir string) (strin
 			break
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("load snapshot: %w", err)
+			// 附 console.log 尾部：目录马上被降级路径删掉，这是 fc 现场的唯一留证
+			return "", fmt.Errorf("load snapshot: %w; console 尾部: %s", err, consoleTail(dir))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -215,6 +216,18 @@ func (s *server) resumeVM(ctx context.Context, sb pg.Sandbox, dir string) (strin
 	}
 	log.Printf("[vmhostd] resume sb=%s ip=%s（原地恢复）", shortID(sb.ID), a.guestIP)
 	return endpoint, nil
+}
+
+// consoleTail 读 fc console.log 的尾部（resume 失败排障用；文件可能很大只取末尾）。
+func consoleTail(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "console.log"))
+	if err != nil {
+		return "(读不到 console.log)"
+	}
+	if len(b) > 500 {
+		b = b[len(b)-500:]
+	}
+	return string(b)
 }
 
 // waitAgentd 轮询 agentd health 直到就绪或超时。

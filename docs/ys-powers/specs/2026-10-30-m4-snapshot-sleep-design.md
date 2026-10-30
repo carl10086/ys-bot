@@ -1,8 +1,23 @@
 # M4 设计：快照休眠/恢复
 
-> 状态：2026-10-30 访谈定稿（Q1–Q4 + 存储议题，全部用户确认）。
+> 状态：2026-10-30 访谈定稿（Q1–Q4 + 存储议题，全部用户确认）；**2026-10-30 已实现**（验收 1–5 全过，见下）。
 > 上游文档：`CONTEXT.md`（术语）、`docs/adr/0001-snapshot-on-host-local-disk.md`、`docs/architecture/phasing.md` M4 行、
 > Grok Bot 讲座 s12/s15（`docs/reference/cs146s-grokbot-lecture.html`）、参照物 `ys-learn/refer/e2b-runtime`。
+
+> **实现期修订（e2e 踩出）**：
+> 1. sweeper 起 SleepWorkflow 从 child workflow 改为 activity 里 `client.ExecuteWorkflow`——实测"父 workflow
+>    同一 task 内发起 child + 立即完成"时 child 从未被 server 创建（Initiated 有、Started/Failed 无）。
+> 2. Schedule 重复创建的错误是 `temporal.ErrScheduleAlreadyRunning`（不是 serviceerror.AlreadyExists）。
+> 3. spawnFC 必须先删残留 fc.sock（Firecracker v1.17 不 unlink，bind 失败进程直接退出）。
+> 4. resumeVM 失败时把 console.log 尾部带进错误（目录随即被降级删除，那是唯一现场）。
+> 5. e2e 期间发现 GoLand 残留旧 ys-server/ys-worker 会静默分流（poll 同 task queue / 占 :8080）——
+>    e2e 前必须确认只有一个 server/worker 在跑。
+>
+> **验收证据（152，2026-10-30）**：① 无活动 ~2min 后自动 sleeping，进程消失，snap.mem(512MB)+snap.vmstate 落盘，
+> slot 保留，sleep dur≈2.8s ② 发消息触发 tool call → resume 同 IP（10.200.0.2）原地恢复，休眠前建的
+> /tmp/m4-e2e.txt 内容 "alive" 完好 ③ turn 进行中的 sweep 候选=0（续期生效）④ 删 snap.mem 后 resume 失败
+> → 日志"resume 失败，降级全新 boot" → turn 正常完成 ⑤ sleeping 下重启 vmhostd 目录完好不动；
+> 删快照重启 → "快照丢失 → stopped"，slot/snapshot_ref 清空；再发消息走全新 boot 正常完成。
 
 ## Objective（目标与验收）
 

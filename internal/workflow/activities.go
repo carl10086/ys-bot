@@ -3,10 +3,14 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
 	"github.com/google/uuid"
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 
 	"ys-sandbox/internal/agent"
 	"ys-sandbox/internal/store/pg"
@@ -20,6 +24,7 @@ type Activities struct {
 	Redis  *redis.Redis
 	Agent  agent.Agent
 	Driver vmdriver.Driver // nil = 无工具环境（M1 行为）
+	TC     client.Client   // M4：sweep 从 activity 里起 SleepWorkflow（sleep.go 头注释有原因）
 }
 
 // DrainQueue 取走会话队列里待处理的一批消息（seq 列表）。队列可丢：消息已在 PG。
@@ -82,6 +87,27 @@ func (a *Activities) RollbackSleep(ctx context.Context, sandboxID string) error 
 		return err
 	}
 	return a.PG.SetSandboxStatus(ctx, id, pg.SandboxStatusAwake)
+}
+
+// StartSleepWorkflows 为每个候选 sandbox 起一个 SleepWorkflow。
+// 固定 ID（sleep:<id>）+ ALLOW_DUPLICATE：已在跑的由 server 拒绝（天然去重）；
+// 并发休眠同一 sandbox 的互斥在 PG CAS（TryStartSleep）。
+func (a *Activities) StartSleepWorkflows(ctx context.Context, ids []string, idleMinutes int32) error {
+	for _, id := range ids {
+		_, err := a.TC.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+			ID:                    "sleep:" + id,
+			TaskQueue:             TaskQueue,
+			WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		}, SleepWorkflow, SleepInput{SandboxID: id, IdleMinutes: idleMinutes})
+		if err != nil {
+			var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+			if errors.As(err, &alreadyStarted) {
+				continue
+			}
+			return fmt.Errorf("start sleep %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // LoadHistory 从 PG 读会话全部消息，投影为 agent 历史（映射规则见 history.go）。
