@@ -39,6 +39,51 @@ func (a *Activities) DrainQueue(ctx context.Context, sessionID string) ([]int64,
 	return out, nil
 }
 
+// ===== M4 休眠 activities（SleepWorkflow 用；语义注释见 sleep.go 与 spec）=====
+
+// ListSleepCandidates 扫出 idleMinutes 分钟无活动的 awake sandbox（返回 id 列表，跨宿主）。
+func (a *Activities) ListSleepCandidates(ctx context.Context, idleMinutes int32) ([]string, error) {
+	list, err := a.PG.ListSleepCandidates(ctx, idleMinutes)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(list))
+	for _, sb := range list {
+		out = append(out, sb.ID.String())
+	}
+	return out, nil
+}
+
+// TryStartSleep 休眠入场券（原子 CAS）：true = 抢到，可以动手休眠。
+func (a *Activities) TryStartSleep(ctx context.Context, sandboxID string, idleMinutes int32) (bool, error) {
+	id, err := uuid.Parse(sandboxID)
+	if err != nil {
+		return false, err
+	}
+	return a.PG.TryStartSleep(ctx, id, idleMinutes)
+}
+
+// SleepSandbox 经 vmdriver 让宿主执行 pause+快照+停机。
+func (a *Activities) SleepSandbox(ctx context.Context, sandboxID string) error {
+	if a.Driver == nil {
+		return fmt.Errorf("无 Driver（VM_DRIVER 未启用），无法休眠")
+	}
+	id, err := uuid.Parse(sandboxID)
+	if err != nil {
+		return err
+	}
+	return a.Driver.SleepVM(ctx, id)
+}
+
+// RollbackSleep SleepVM 失败的回滚：状态放回 awake（VM 实际还醒着）。
+func (a *Activities) RollbackSleep(ctx context.Context, sandboxID string) error {
+	id, err := uuid.Parse(sandboxID)
+	if err != nil {
+		return err
+	}
+	return a.PG.SetSandboxStatus(ctx, id, pg.SandboxStatusAwake)
+}
+
 // LoadHistory 从 PG 读会话全部消息，投影为 agent 历史（映射规则见 history.go）。
 func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent.Message, error) {
 	sid, err := uuid.Parse(sessionID)

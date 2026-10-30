@@ -23,6 +23,7 @@ func (fakeDriver) EnsureAwake(context.Context, string) (uuid.UUID, error) { retu
 func (fakeDriver) Exec(context.Context, uuid.UUID, string, uint32) (int32, string, string, error) {
 	return 0, "", "", nil
 }
+func (fakeDriver) SleepVM(context.Context, uuid.UUID) error { return nil }
 
 // 懒唤醒门控：Driver=nil（无 VM 环境）时 CallLLM 不得把工具给模型。
 func TestCallLLM_NoDriverNoTools(t *testing.T) {

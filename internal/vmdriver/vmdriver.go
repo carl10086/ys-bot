@@ -28,6 +28,9 @@ type Driver interface {
 	EnsureAwake(ctx context.Context, userID string) (uuid.UUID, error)
 	// Exec 在 sandbox 的 VM 里同步执行命令。
 	Exec(ctx context.Context, sandboxID uuid.UUID, cmd string, timeoutSec uint32) (exitCode int32, stdout, stderr string, err error)
+	// SleepVM 休眠 sandbox 的 VM（M4）：宿主侧 pause + 快照 + 停机。
+	// 调用前调用方必须已完成 CAS 占坑（status=sleeping）。
+	SleepVM(ctx context.Context, sandboxID uuid.UUID) error
 }
 
 // RemoteDriver 经 Redis 注册表发现 vmhostd，转发一切调用。
@@ -106,4 +109,18 @@ func (d *RemoteDriver) Exec(ctx context.Context, sandboxID uuid.UUID, cmd string
 		return 0, "", "", err
 	}
 	return resp.Msg.ExitCode, resp.Msg.Stdout, resp.Msg.Stderr, nil
+}
+
+// SleepVM 休眠：按 host_id 找 vmhostd 转发 SleepVM（与 Exec 同一条发现路径）。
+func (d *RemoteDriver) SleepVM(ctx context.Context, sandboxID uuid.UUID) error {
+	sb, err := d.PG.GetSandboxByID(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	c, err := d.vmhostClient(ctx, sb.HostID)
+	if err != nil {
+		return err
+	}
+	_, err = c.SleepVM(ctx, connect.NewRequest(&vmhostdv1.SleepVMRequest{SandboxId: sandboxID.String()}))
+	return err
 }
