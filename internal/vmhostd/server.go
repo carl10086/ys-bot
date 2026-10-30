@@ -133,6 +133,22 @@ func (s *server) StatusVM(ctx context.Context, req *connect.Request[vmhostdv1.St
 	return connect.NewResponse(&vmhostdv1.StatusVMResponse{Status: sb.Status, Endpoint: sb.VMIP}), nil
 }
 
+// SleepVM 休眠（M4）：pause → 快照落盘 → 杀 fc → 拆 tap；目录/快照保留，slot 不释放。
+// status 的 CAS 由调用方（SleepWorkflow）先做；本 RPC 只管宿主侧动作。
+func (s *server) SleepVM(ctx context.Context, req *connect.Request[vmhostdv1.SleepVMRequest]) (*connect.Response[vmhostdv1.SleepVMResponse], error) {
+	id, err := parseSandboxID(req.Msg.SandboxId)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	if err := s.sleepVM(ctx, id); err != nil {
+		log.Printf("[vmhostd] sleep sb=%s err=%v dur=%s", shortID(id), err, time.Since(start).Round(time.Millisecond))
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	log.Printf("[vmhostd] sleep sb=%s dur=%s", shortID(id), time.Since(start).Round(time.Millisecond))
+	return connect.NewResponse(&vmhostdv1.SleepVMResponse{}), nil
+}
+
 // Exec 代理：按 sandbox_id 转发到对应 VM 的 agentd（VM tap IP 只有本宿主能路由，
 // 所以代理必须长在 vmhostd 上——设计文档"拓扑决策"）。
 func (s *server) Exec(ctx context.Context, req *connect.Request[agentdv1.ExecRequest]) (*connect.Response[agentdv1.ExecResponse], error) {

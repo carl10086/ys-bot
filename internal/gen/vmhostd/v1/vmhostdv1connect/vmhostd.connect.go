@@ -40,6 +40,8 @@ const (
 	VmhostdDestroyVMProcedure = "/vmhostd.v1.Vmhostd/DestroyVM"
 	// VmhostdStatusVMProcedure is the fully-qualified name of the Vmhostd's StatusVM RPC.
 	VmhostdStatusVMProcedure = "/vmhostd.v1.Vmhostd/StatusVM"
+	// VmhostdSleepVMProcedure is the fully-qualified name of the Vmhostd's SleepVM RPC.
+	VmhostdSleepVMProcedure = "/vmhostd.v1.Vmhostd/SleepVM"
 	// VmhostdExecProcedure is the fully-qualified name of the Vmhostd's Exec RPC.
 	VmhostdExecProcedure = "/vmhostd.v1.Vmhostd/Exec"
 )
@@ -52,6 +54,9 @@ type VmhostdClient interface {
 	DestroyVM(context.Context, *connect.Request[v1.DestroyVMRequest]) (*connect.Response[v1.DestroyVMResponse], error)
 	// StatusVM 查 PG 里的 sandbox 状态。
 	StatusVM(context.Context, *connect.Request[v1.StatusVMRequest]) (*connect.Response[v1.StatusVMResponse], error)
+	// SleepVM 休眠：pause → 内存/设备快照落盘 → 杀 firecracker → 拆 tap。
+	// VM 目录与 rootfs、快照文件保留（resume 用）；slot 不释放（M4 spec Q3）。
+	SleepVM(context.Context, *connect.Request[v1.SleepVMRequest]) (*connect.Response[v1.SleepVMResponse], error)
 	// Exec 代理：按 sandbox_id 转发到对应 VM 的 agentd。
 	Exec(context.Context, *connect.Request[v11.ExecRequest]) (*connect.Response[v11.ExecResponse], error)
 }
@@ -85,6 +90,12 @@ func NewVmhostdClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 			connect.WithSchema(vmhostdMethods.ByName("StatusVM")),
 			connect.WithClientOptions(opts...),
 		),
+		sleepVM: connect.NewClient[v1.SleepVMRequest, v1.SleepVMResponse](
+			httpClient,
+			baseURL+VmhostdSleepVMProcedure,
+			connect.WithSchema(vmhostdMethods.ByName("SleepVM")),
+			connect.WithClientOptions(opts...),
+		),
 		exec: connect.NewClient[v11.ExecRequest, v11.ExecResponse](
 			httpClient,
 			baseURL+VmhostdExecProcedure,
@@ -99,6 +110,7 @@ type vmhostdClient struct {
 	ensureVM  *connect.Client[v1.EnsureVMRequest, v1.EnsureVMResponse]
 	destroyVM *connect.Client[v1.DestroyVMRequest, v1.DestroyVMResponse]
 	statusVM  *connect.Client[v1.StatusVMRequest, v1.StatusVMResponse]
+	sleepVM   *connect.Client[v1.SleepVMRequest, v1.SleepVMResponse]
 	exec      *connect.Client[v11.ExecRequest, v11.ExecResponse]
 }
 
@@ -117,6 +129,11 @@ func (c *vmhostdClient) StatusVM(ctx context.Context, req *connect.Request[v1.St
 	return c.statusVM.CallUnary(ctx, req)
 }
 
+// SleepVM calls vmhostd.v1.Vmhostd.SleepVM.
+func (c *vmhostdClient) SleepVM(ctx context.Context, req *connect.Request[v1.SleepVMRequest]) (*connect.Response[v1.SleepVMResponse], error) {
+	return c.sleepVM.CallUnary(ctx, req)
+}
+
 // Exec calls vmhostd.v1.Vmhostd.Exec.
 func (c *vmhostdClient) Exec(ctx context.Context, req *connect.Request[v11.ExecRequest]) (*connect.Response[v11.ExecResponse], error) {
 	return c.exec.CallUnary(ctx, req)
@@ -130,6 +147,9 @@ type VmhostdHandler interface {
 	DestroyVM(context.Context, *connect.Request[v1.DestroyVMRequest]) (*connect.Response[v1.DestroyVMResponse], error)
 	// StatusVM 查 PG 里的 sandbox 状态。
 	StatusVM(context.Context, *connect.Request[v1.StatusVMRequest]) (*connect.Response[v1.StatusVMResponse], error)
+	// SleepVM 休眠：pause → 内存/设备快照落盘 → 杀 firecracker → 拆 tap。
+	// VM 目录与 rootfs、快照文件保留（resume 用）；slot 不释放（M4 spec Q3）。
+	SleepVM(context.Context, *connect.Request[v1.SleepVMRequest]) (*connect.Response[v1.SleepVMResponse], error)
 	// Exec 代理：按 sandbox_id 转发到对应 VM 的 agentd。
 	Exec(context.Context, *connect.Request[v11.ExecRequest]) (*connect.Response[v11.ExecResponse], error)
 }
@@ -159,6 +179,12 @@ func NewVmhostdHandler(svc VmhostdHandler, opts ...connect.HandlerOption) (strin
 		connect.WithSchema(vmhostdMethods.ByName("StatusVM")),
 		connect.WithHandlerOptions(opts...),
 	)
+	vmhostdSleepVMHandler := connect.NewUnaryHandler(
+		VmhostdSleepVMProcedure,
+		svc.SleepVM,
+		connect.WithSchema(vmhostdMethods.ByName("SleepVM")),
+		connect.WithHandlerOptions(opts...),
+	)
 	vmhostdExecHandler := connect.NewUnaryHandler(
 		VmhostdExecProcedure,
 		svc.Exec,
@@ -173,6 +199,8 @@ func NewVmhostdHandler(svc VmhostdHandler, opts ...connect.HandlerOption) (strin
 			vmhostdDestroyVMHandler.ServeHTTP(w, r)
 		case VmhostdStatusVMProcedure:
 			vmhostdStatusVMHandler.ServeHTTP(w, r)
+		case VmhostdSleepVMProcedure:
+			vmhostdSleepVMHandler.ServeHTTP(w, r)
 		case VmhostdExecProcedure:
 			vmhostdExecHandler.ServeHTTP(w, r)
 		default:
@@ -194,6 +222,10 @@ func (UnimplementedVmhostdHandler) DestroyVM(context.Context, *connect.Request[v
 
 func (UnimplementedVmhostdHandler) StatusVM(context.Context, *connect.Request[v1.StatusVMRequest]) (*connect.Response[v1.StatusVMResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vmhostd.v1.Vmhostd.StatusVM is not implemented"))
+}
+
+func (UnimplementedVmhostdHandler) SleepVM(context.Context, *connect.Request[v1.SleepVMRequest]) (*connect.Response[v1.SleepVMResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vmhostd.v1.Vmhostd.SleepVM is not implemented"))
 }
 
 func (UnimplementedVmhostdHandler) Exec(context.Context, *connect.Request[v11.ExecRequest]) (*connect.Response[v11.ExecResponse], error) {

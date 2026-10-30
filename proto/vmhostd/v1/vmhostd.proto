@@ -15,6 +15,9 @@ service Vmhostd {
   rpc DestroyVM(DestroyVMRequest) returns (DestroyVMResponse);
   // StatusVM 查 PG 里的 sandbox 状态。
   rpc StatusVM(StatusVMRequest) returns (StatusVMResponse);
+  // SleepVM 休眠：pause → 内存/设备快照落盘 → 杀 firecracker → 拆 tap。
+  // VM 目录与 rootfs、快照文件保留（resume 用）；slot 不释放（M4 spec Q3）。
+  rpc SleepVM(SleepVMRequest) returns (SleepVMResponse);
   // Exec 代理：按 sandbox_id 转发到对应 VM 的 agentd。
   rpc Exec(agentd.v1.ExecRequest) returns (agentd.v1.ExecResponse);
 }
@@ -38,6 +41,12 @@ message StatusVMRequest {
 }
 
 message StatusVMResponse {
-  string status = 1; // creating / awake / stopped / failed
+  string status = 1; // creating / awake / sleeping / stopped / failed
   string endpoint = 2;
 }
+
+message SleepVMRequest {
+  string sandbox_id = 1;
+}
+
+message SleepVMResponse {}

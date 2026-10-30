@@ -109,3 +109,9 @@ WHERE id = $1 AND status = 'awake'
 -- name: SetSandboxSnapshotRef :exec
 -- 休眠成功写快照路径；降级 boot / 销毁后清 NULL（NULL = 无快照可恢复）。
 UPDATE sandboxes SET snapshot_ref = $2 WHERE id = $1;
+
+-- name: ListSleepingSandboxesByHost :many
+-- vmhostd reconcile 用：本宿主 sleeping 的 VM（快照丢失检测——丢了就转 stopped）。
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE host_id = $1 AND status = 'sleeping';

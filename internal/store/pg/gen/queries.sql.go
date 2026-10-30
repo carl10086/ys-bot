@@ -414,6 +414,51 @@ func (q *Queries) ListSleepCandidates(ctx context.Context, dollar_1 int32) ([]Li
 	return items, nil
 }
 
+const listSleepingSandboxesByHost = `-- name: ListSleepingSandboxesByHost :many
+SELECT id, user_id, host_id, status, slot, vm_ip, created_at
+FROM sandboxes
+WHERE host_id = $1 AND status = 'sleeping'
+`
+
+type ListSleepingSandboxesByHostRow struct {
+	ID        uuid.UUID
+	UserID    string
+	HostID    string
+	Status    string
+	Slot      pgtype.Int4
+	VmIp      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+// vmhostd reconcile 用：本宿主 sleeping 的 VM（快照丢失检测——丢了就转 stopped）。
+func (q *Queries) ListSleepingSandboxesByHost(ctx context.Context, hostID string) ([]ListSleepingSandboxesByHostRow, error) {
+	rows, err := q.db.Query(ctx, listSleepingSandboxesByHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSleepingSandboxesByHostRow
+	for rows.Next() {
+		var i ListSleepingSandboxesByHostRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.HostID,
+			&i.Status,
+			&i.Slot,
+			&i.VmIp,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsedSlotsByHost = `-- name: ListUsedSlotsByHost :many
 SELECT slot FROM sandboxes WHERE host_id = $1 AND slot IS NOT NULL
 `

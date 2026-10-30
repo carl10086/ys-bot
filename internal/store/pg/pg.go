@@ -348,6 +348,19 @@ func (p *PG) SetSandboxSnapshotRef(ctx context.Context, id uuid.UUID, ref *strin
 	return p.q.SetSandboxSnapshotRef(ctx, gen.SetSandboxSnapshotRefParams{ID: id, SnapshotRef: v})
 }
 
+// ListSleepingSandboxesByHost reconcile 用：本宿主 sleeping 的 sandbox（快照丢失检测）。
+func (p *PG) ListSleepingSandboxesByHost(ctx context.Context, hostID string) ([]Sandbox, error) {
+	rows, err := p.q.ListSleepingSandboxesByHost(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Sandbox, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, sandboxRow(r.ID, r.UserID, r.HostID, r.Status, r.Slot, r.VmIp, r.CreatedAt))
+	}
+	return out, nil
+}
+
 func sandboxRow(id uuid.UUID, userID, hostID, status string, slot pgtype.Int4, vmIP pgtype.Text, createdAt pgtype.Timestamptz) Sandbox {
 	s := Sandbox{ID: id, UserID: userID, HostID: hostID, Status: status, VMIP: vmIP.String, CreatedAt: createdAt.Time}
 	if slot.Valid {
