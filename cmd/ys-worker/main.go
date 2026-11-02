@@ -41,7 +41,8 @@ func main() {
 		BaseURL:  envOr("LLM_BASE_URL", "https://api.openai.com/v1"),
 		APIKey:   os.Getenv("LLM_API_KEY"),
 		Model:    envOr("LLM_MODEL", "gpt-4o-mini"),
-		System:   envOr("LLM_SYSTEM", "You are a helpful assistant."),
+		// M5 起 system 不走构造期固定值——每 turn 由 BuildSystemPrompt 装配（含记忆），
+		// 底稿经 Activities.BasePrompt 传入（原 LLM_SYSTEM）。
 	})
 	if err != nil {
 		log.Fatalf("agent: %v", err)
@@ -88,7 +89,8 @@ func main() {
 		log.Print("VM_DRIVER=remote，shell 工具已启用")
 		ensureSleepSchedule(ctx, c, envInt("SLEEP_IDLE_MINUTES", 10))
 	}
-	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv, TC: c, MemoryAgent: memAg})
+	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv, TC: c, MemoryAgent: memAg,
+		BasePrompt: envOr("LLM_SYSTEM", "You are a helpful assistant.")})
 
 	log.Printf("listening on task queue %q", workflow.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

@@ -62,6 +62,15 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		return fmt.Errorf("load history: %w", err)
 	}
 
+	// M5 注入：装配记忆的系统提示作为 history[0]（不落库；空串 = 无 base 无记忆，不插）
+	var sysprompt string
+	if err := workflow.ExecuteActivity(ctx, "BuildSystemPrompt", in.SessionID).Get(ctx, &sysprompt); err != nil {
+		return fmt.Errorf("build system prompt: %w", err)
+	}
+	if sysprompt != "" {
+		history = append([]agent.Message{{Role: "system", Content: sysprompt}}, history...)
+	}
+
 	// 工具 loop（spec §4）：模型一次 Step 要么回文本（收尾），要么给一批 tool_calls
 	// （首个 tool_call 前懒唤醒 VM → 逐个执行 → 每步落库 + 发信号 → 继续）。
 	sandboxID := ""

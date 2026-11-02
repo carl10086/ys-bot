@@ -70,3 +70,40 @@ func TestAgent_Step_MapsHistoryAndReturnsText(t *testing.T) {
 		t.Fatalf("无工具请求不应产生 ToolCalls: %+v", res.ToolCalls)
 	}
 }
+
+// M5：history 里的 role=system 消息必须映射为 OpenAI 的 system 消息（注入通道）。
+func TestAgent_Step_SystemRoleFromHistory(t *testing.T) {
+	var gotSystem string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		for _, m := range req.Messages {
+			if m.Role == "system" {
+				gotSystem = m.Content
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	ag, err := NewFantasy(Config{Provider: "openai", BaseURL: srv.URL + "/v1", APIKey: "k", Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ag.Step(context.Background(), []Message{
+		{Role: "system", Content: "记忆块：偏好简短"},
+		{Role: "user", Content: "hi"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSystem != "记忆块：偏好简短" {
+		t.Fatalf("system 消息未映射: %q", gotSystem)
+	}
+}

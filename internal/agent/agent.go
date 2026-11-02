@@ -95,6 +95,12 @@ func (a *fantasyAgent) Step(ctx context.Context, history []Message, tools []Tool
 	}
 	for _, m := range history {
 		switch m.Role {
+		case "system":
+			// M5 注入通道：记忆装配的系统提示作为 history[0] 传入（不落库）。
+			prompt = append(prompt, fantasy.Message{
+				Role:    fantasy.MessageRoleSystem,
+				Content: []fantasy.MessagePart{fantasy.TextPart{Text: m.Content}},
+			})
 		case "user":
 			prompt = append(prompt, fantasy.NewUserMessage(m.Content))
 		case "assistant":

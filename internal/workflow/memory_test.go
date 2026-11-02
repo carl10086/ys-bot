@@ -184,3 +184,40 @@ func TestMemoryPassWorkflow_EndToEnd(t *testing.T) {
 		t.Fatalf("audit source = %q, want pass:<turnID>", src)
 	}
 }
+
+// BuildSystemPrompt 接线（真 PG）：session→user→四路查询→组装；过期 note 不进。
+func TestActivities_BuildSystemPrompt(t *testing.T) {
+	db, _ := newMemoryTestPG(t)
+	ctx := context.Background()
+
+	sess, err := db.CreateSession(ctx, "u-prompt", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := int32(-10)
+	if _, err := db.ApplyMemoryOps(ctx, "u-prompt", []pg.MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "偏好简短回答", Importance: 9},
+		{Op: "add", TargetType: "memory", Type: "log", Text: "2026-11-02 做了 M5 设计", Importance: 5},
+		{Op: "add", TargetType: "memory", Type: "note", Text: "活跃便签", Importance: 5},
+		{Op: "add", TargetType: "memory", Type: "note", Text: "过期便签", Importance: 5, TTLMinutes: &past},
+		{Op: "add", TargetType: "skill", Name: "m5-runbook", Description: "验收手册", Content: "全文不注入", Importance: 5},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Activities{PG: db, BasePrompt: "BASE"}
+	out, err := a.BuildSystemPrompt(ctx, sess.ID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"BASE", "偏好简短回答", "2026-11-02 做了 M5 设计", "活跃便签", "m5-runbook", "验收手册"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("prompt 缺 %q:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{"过期便签", "全文不注入"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("prompt 不应含 %q", notWant)
+		}
+	}
+}

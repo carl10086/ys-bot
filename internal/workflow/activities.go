@@ -26,6 +26,7 @@ type Activities struct {
 	Driver      vmdriver.Driver // nil = 无工具环境（M1 行为）
 	TC          client.Client   // M4：sweep 从 activity 里起 SleepWorkflow（sleep.go 头注释有原因）
 	MemoryAgent agent.Agent     // M5：提取专用 LLM 实例（System=ExtractPrompt）；nil = 记忆功能关闭
+	BasePrompt  string          // M5：system prompt 底稿（原 LLM_SYSTEM），BuildSystemPrompt 在其上装配记忆
 }
 
 // DrainQueue 取走会话队列里待处理的一批消息（seq 列表）。队列可丢：消息已在 PG。

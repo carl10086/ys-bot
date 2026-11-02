@@ -26,6 +26,7 @@ func TestTurnWorkflow_HappyPath(t *testing.T) {
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{
 		{Role: "user", Content: "你好"},
 	}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "你好，我是助手"}, nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { written = args.Get(1).(WriteMessageInput) }).
@@ -77,6 +78,7 @@ func TestTurnWorkflow_LLMErrorStillReleasesLock(t *testing.T) {
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return("", errors.New("llm down"))
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -97,6 +99,7 @@ func TestTurnWorkflow_ExecErrorProducesValidJSON(t *testing.T) {
 	tc := agent.ToolCall{ID: "c1", Name: "shell", Input: `{"cmd":"ls"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
@@ -160,6 +163,7 @@ func TestTurnWorkflow_ToolLoop(t *testing.T) {
 	tc := agent.ToolCall{ID: "call_1", Name: "shell", Input: `{"cmd":"ls /etc | head -5"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "看看 /etc"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
@@ -200,6 +204,7 @@ func TestTurnWorkflow_PlainChatNeverWakesVM(t *testing.T) {
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "hello"}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
 	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
@@ -221,6 +226,7 @@ func TestTurnWorkflow_ToolLoopCap(t *testing.T) {
 	tc := agent.ToolCall{ID: "c", Name: "shell", Input: `{"cmd":"true"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
 	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "loop"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil)
 	env.OnActivity("EnsureAwake", mock.Anything, "s1").Return("sb-1", nil).Once()
@@ -237,5 +243,34 @@ func TestTurnWorkflow_ToolLoopCap(t *testing.T) {
 	}
 	if toolCalls > maxToolSteps {
 		t.Fatalf("toolCalls = %d, 超过上限 %d", toolCalls, maxToolSteps)
+	}
+}
+
+// M5 注入：turn 启动时 BuildSystemPrompt 的结果必须作为 history[0]（role=system）喂给 CallLLM。
+func TestTurnWorkflow_SystemPromptInjected(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&Activities{})
+
+	var gotHistory []agent.Message
+	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
+	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("BASE\n# 关于用户的记忆\n- 偏好简短", nil)
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { gotHistory = args.Get(1).([]agent.Message) }).
+		Return(agent.StepResult{Text: "ok"}, nil)
+	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
+	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotHistory) != 2 || gotHistory[0].Role != "system" {
+		t.Fatalf("history[0] 应为 system 注入: %+v", gotHistory)
+	}
+	if !strings.Contains(gotHistory[0].Content, "偏好简短") {
+		t.Fatalf("注入内容不含记忆块: %q", gotHistory[0].Content)
 	}
 }
