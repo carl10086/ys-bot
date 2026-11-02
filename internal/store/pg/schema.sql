@@ -38,3 +38,46 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (session_id, seq)                  -- 业务唯一性；PK 是 id
 );
+
+-- ===== M5 记忆与技能（spec: 2026-11-02-m5-memory-design.md；选型 ADR-0002）=====
+-- 记忆是信息不是指令（讲座 30）：事实进 memories，流程进 skills。
+
+CREATE TABLE IF NOT EXISTS memories (
+  id          uuid PRIMARY KEY,              -- uuidv7，应用生成
+  user_id     text NOT NULL,                 -- 记忆归 user 不归 session（跨会话共享）
+  type        text NOT NULL,                 -- profile / log / note
+  text        text NOT NULL,                 -- 一条事实（markdown）
+  importance  int  NOT NULL DEFAULT 5,       -- 提取时 LLM 打分 1-10，注入排序用
+  hash        text NOT NULL,                 -- md5(text)：同文本不重复入库
+  expires_at  timestamptz,                   -- 仅 note：消退时间；NULL = 不消退
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, hash)
+);
+
+-- 注入扫描：按用户+类型取（profile 全量 / log 最近 30 / 活跃 note）。
+CREATE INDEX IF NOT EXISTS memories_user_type ON memories (user_id, type);
+
+CREATE TABLE IF NOT EXISTS skills (
+  id          uuid PRIMARY KEY,
+  user_id     text NOT NULL,
+  name        text NOT NULL,                 -- 注入清单用
+  description text NOT NULL DEFAULT '',      -- 一句话，agent 据此决定读不读全文
+  content     text NOT NULL,                 -- markdown 全文，memory_read 读
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+
+-- 审计流水：每次记忆写操作留痕（"它为什么记住了这个"必须可追溯）。
+CREATE TABLE IF NOT EXISTS memory_ops (
+  id          bigserial PRIMARY KEY,
+  user_id     text NOT NULL,
+  op          text NOT NULL,                 -- add / update / delete
+  target_type text NOT NULL,                 -- memory / skill
+  target_id   uuid,
+  before_text text,
+  after_text  text,
+  source      text NOT NULL,                 -- pass:<turn_id> / agent
+  created_at  timestamptz NOT NULL DEFAULT now()
+);

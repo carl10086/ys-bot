@@ -9,6 +9,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Memory struct {
+	ID         uuid.UUID
+	UserID     string
+	Type       string
+	Text       string
+	Importance int32
+	Hash       string
+	ExpiresAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type MemoryOp struct {
+	ID         int64
+	UserID     string
+	Op         string
+	TargetType string
+	TargetID   *uuid.UUID
+	BeforeText pgtype.Text
+	AfterText  pgtype.Text
+	Source     string
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Message struct {
 	ID        uuid.UUID
 	SessionID uuid.UUID
@@ -39,4 +63,14 @@ type Session struct {
 	Title     string
 	LastSeq   int64
 	CreatedAt pgtype.Timestamptz
+}
+
+type Skill struct {
+	ID          uuid.UUID
+	UserID      string
+	Name        string
+	Description string
+	Content     string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
 }

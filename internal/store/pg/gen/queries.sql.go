@@ -12,6 +12,41 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addMemory = `-- name: AddMemory :execrows
+
+INSERT INTO memories (id, user_id, type, text, importance, hash, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (user_id, hash) DO NOTHING
+`
+
+type AddMemoryParams struct {
+	ID         uuid.UUID
+	UserID     string
+	Type       string
+	Text       string
+	Importance int32
+	Hash       string
+	ExpiresAt  pgtype.Timestamptz
+}
+
+// ===== M5 记忆与技能（spec: 2026-11-02-m5-memory-design.md）=====
+// hash 撞车（同文本已在库）= 去重，0 行返回。
+func (q *Queries) AddMemory(ctx context.Context, arg AddMemoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addMemory,
+		arg.ID,
+		arg.UserID,
+		arg.Type,
+		arg.Text,
+		arg.Importance,
+		arg.Hash,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (id, user_id, host_id, status)
@@ -85,6 +120,18 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (C
 	return i, err
 }
 
+const deleteMemory = `-- name: DeleteMemory :execrows
+DELETE FROM memories WHERE id = $1
+`
+
+func (q *Queries) DeleteMemory(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMemory, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id = $1
 `
@@ -101,6 +148,45 @@ DELETE FROM messages WHERE session_id = $1
 func (q *Queries) DeleteSessionMessages(ctx context.Context, sessionID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteSessionMessages, sessionID)
 	return err
+}
+
+const deleteSkill = `-- name: DeleteSkill :execrows
+DELETE FROM skills WHERE user_id = $1 AND name = $2
+`
+
+type DeleteSkillParams struct {
+	UserID string
+	Name   string
+}
+
+func (q *Queries) DeleteSkill(ctx context.Context, arg DeleteSkillParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSkill, arg.UserID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getMemoryByID = `-- name: GetMemoryByID :one
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories WHERE id = $1
+`
+
+func (q *Queries) GetMemoryByID(ctx context.Context, id uuid.UUID) (Memory, error) {
+	row := q.db.QueryRow(ctx, getMemoryByID, id)
+	var i Memory
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Type,
+		&i.Text,
+		&i.Importance,
+		&i.Hash,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getMessageSeqByMsgID = `-- name: GetMessageSeqByMsgID :one
@@ -195,6 +281,59 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (GetSessionRow, 
 	return i, err
 }
 
+const getSkillByName = `-- name: GetSkillByName :one
+SELECT id, user_id, name, description, content, created_at, updated_at
+FROM skills WHERE user_id = $1 AND name = $2
+`
+
+type GetSkillByNameParams struct {
+	UserID string
+	Name   string
+}
+
+func (q *Queries) GetSkillByName(ctx context.Context, arg GetSkillByNameParams) (Skill, error) {
+	row := q.db.QueryRow(ctx, getSkillByName, arg.UserID, arg.Name)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Description,
+		&i.Content,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertMemoryOp = `-- name: InsertMemoryOp :exec
+INSERT INTO memory_ops (user_id, op, target_type, target_id, before_text, after_text, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertMemoryOpParams struct {
+	UserID     string
+	Op         string
+	TargetType string
+	TargetID   *uuid.UUID
+	BeforeText pgtype.Text
+	AfterText  pgtype.Text
+	Source     string
+}
+
+func (q *Queries) InsertMemoryOp(ctx context.Context, arg InsertMemoryOpParams) error {
+	_, err := q.db.Exec(ctx, insertMemoryOp,
+		arg.UserID,
+		arg.Op,
+		arg.TargetType,
+		arg.TargetID,
+		arg.BeforeText,
+		arg.AfterText,
+		arg.Source,
+	)
+	return err
+}
+
 const insertMessage = `-- name: InsertMessage :one
 INSERT INTO messages (id, session_id, seq, user_id, kind, content, msg_id, turn_id)
 VALUES ($1, $2, $3, (SELECT user_id FROM sessions WHERE id = $2), $4, $5, $6, $7)
@@ -227,6 +366,45 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const listActiveNotes = `-- name: ListActiveNotes :many
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories
+WHERE user_id = $1 AND type = 'note'
+  AND (expires_at IS NULL OR expires_at > now())
+ORDER BY created_at DESC
+`
+
+// 注入：未消退的便签（expires_at NULL = 不消退）。
+func (q *Queries) ListActiveNotes(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := q.db.Query(ctx, listActiveNotes, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Memory
+	for rows.Next() {
+		var i Memory
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Type,
+			&i.Text,
+			&i.Importance,
+			&i.Hash,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listActiveSandboxesByHost = `-- name: ListActiveSandboxesByHost :many
@@ -263,6 +441,45 @@ func (q *Queries) ListActiveSandboxesByHost(ctx context.Context, hostID string) 
 			&i.Slot,
 			&i.VmIp,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllMemoriesForUser = `-- name: ListAllMemoriesForUser :many
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories
+WHERE user_id = $1
+  AND (type != 'note' OR expires_at IS NULL OR expires_at > now())
+ORDER BY created_at
+`
+
+// 提取上下文：全部记忆（过期 note 已消退，不给提取模型看——"只能删见过的"）。
+func (q *Queries) ListAllMemoriesForUser(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := q.db.Query(ctx, listAllMemoriesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Memory
+	for rows.Next() {
+		var i Memory
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Type,
+			&i.Text,
+			&i.Importance,
+			&i.Hash,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -324,6 +541,85 @@ func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterPa
 	return items, nil
 }
 
+const listProfileMemories = `-- name: ListProfileMemories :many
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories
+WHERE user_id = $1 AND type = 'profile'
+ORDER BY importance DESC, updated_at DESC
+LIMIT 100
+`
+
+// 注入：核心事实全量（上限 100 条，重要性优先）。
+func (q *Queries) ListProfileMemories(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := q.db.Query(ctx, listProfileMemories, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Memory
+	for rows.Next() {
+		var i Memory
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Type,
+			&i.Text,
+			&i.Importance,
+			&i.Hash,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentLogMemories = `-- name: ListRecentLogMemories :many
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories
+WHERE user_id = $1 AND type = 'log'
+ORDER BY created_at DESC, id DESC
+LIMIT 30
+`
+
+// 注入：事件日志最近 30 条（讲座 30 "30 most relevant recent"）。
+// id 做次序兜底：同事务批量插入的 created_at 相同（now() = 事务起点），uuidv7 单调。
+func (q *Queries) ListRecentLogMemories(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := q.db.Query(ctx, listRecentLogMemories, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Memory
+	for rows.Next() {
+		var i Memory
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Type,
+			&i.Text,
+			&i.Importance,
+			&i.Hash,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionsByUser = `-- name: ListSessionsByUser :many
 SELECT s.id, s.user_id, s.title, s.created_at,
        COALESCE(MAX(m.created_at), s.created_at) AS last_active_at
@@ -359,6 +655,67 @@ func (q *Queries) ListSessionsByUser(ctx context.Context, userID string) ([]List
 			&i.CreatedAt,
 			&i.LastActiveAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSkillCatalog = `-- name: ListSkillCatalog :many
+SELECT name, description FROM skills WHERE user_id = $1 ORDER BY name
+`
+
+type ListSkillCatalogRow struct {
+	Name        string
+	Description string
+}
+
+// 注入清单：只有 name+description；全文靠 memory_read 按需读。
+func (q *Queries) ListSkillCatalog(ctx context.Context, userID string) ([]ListSkillCatalogRow, error) {
+	rows, err := q.db.Query(ctx, listSkillCatalog, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkillCatalogRow
+	for rows.Next() {
+		var i ListSkillCatalogRow
+		if err := rows.Scan(&i.Name, &i.Description); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSkillsForUser = `-- name: ListSkillsForUser :many
+SELECT id, name, description FROM skills WHERE user_id = $1 ORDER BY name
+`
+
+type ListSkillsForUserRow struct {
+	ID          uuid.UUID
+	Name        string
+	Description string
+}
+
+// 提取上下文：id + 清单字段（提取模型要能对 skill 发 update/delete）。
+func (q *Queries) ListSkillsForUser(ctx context.Context, userID string) ([]ListSkillsForUserRow, error) {
+	rows, err := q.db.Query(ctx, listSkillsForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkillsForUserRow
+	for rows.Next() {
+		var i ListSkillsForUserRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.Description); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -459,6 +816,59 @@ func (q *Queries) ListSleepingSandboxesByHost(ctx context.Context, hostID string
 	return items, nil
 }
 
+const listTurnMessages = `-- name: ListTurnMessages :many
+SELECT session_id, seq, kind, content, msg_id, turn_id, created_at
+FROM messages
+WHERE session_id = $1 AND (turn_id = $2 OR seq = ANY($3::bigint[]))
+ORDER BY seq
+`
+
+type ListTurnMessagesParams struct {
+	SessionID uuid.UUID
+	TurnID    pgtype.Text
+	Column3   []int64
+}
+
+type ListTurnMessagesRow struct {
+	SessionID uuid.UUID
+	Seq       int64
+	Kind      string
+	Content   []byte
+	MsgID     *uuid.UUID
+	TurnID    pgtype.Text
+	CreatedAt pgtype.Timestamptz
+}
+
+// pass 的提取原料 = 本轮消息。turn_id 仅 assistant 行有（schema 注释），
+// 用户消息靠 turn 的 batch seq 列表兜。
+func (q *Queries) ListTurnMessages(ctx context.Context, arg ListTurnMessagesParams) ([]ListTurnMessagesRow, error) {
+	rows, err := q.db.Query(ctx, listTurnMessages, arg.SessionID, arg.TurnID, arg.Column3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTurnMessagesRow
+	for rows.Next() {
+		var i ListTurnMessagesRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.Seq,
+			&i.Kind,
+			&i.Content,
+			&i.MsgID,
+			&i.TurnID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsedSlotsByHost = `-- name: ListUsedSlotsByHost :many
 SELECT slot FROM sandboxes WHERE host_id = $1 AND slot IS NOT NULL
 `
@@ -531,6 +941,51 @@ func (q *Queries) ReleaseSandbox(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const searchMemories = `-- name: SearchMemories :many
+SELECT id, kind, text FROM (
+  SELECT id, 'memory' AS kind, text, updated_at FROM memories
+  WHERE memories.user_id = $1 AND text ILIKE '%' || $2 || '%'
+  UNION ALL
+  SELECT id, 'skill' AS kind, content AS text, updated_at FROM skills
+  WHERE skills.user_id = $1 AND (content ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%')
+) hits
+ORDER BY updated_at DESC
+LIMIT $3
+`
+
+type SearchMemoriesParams struct {
+	UserID  string
+	Column2 pgtype.Text
+	Limit   int32
+}
+
+type SearchMemoriesRow struct {
+	ID   uuid.UUID
+	Kind string
+	Text string
+}
+
+// memory_search 工具（v1 关键词）：记忆正文 + 技能全文/名称。向量检索留作演进（ADR-0002）。
+func (q *Queries) SearchMemories(ctx context.Context, arg SearchMemoriesParams) ([]SearchMemoriesRow, error) {
+	rows, err := q.db.Query(ctx, searchMemories, arg.UserID, arg.Column2, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMemoriesRow
+	for rows.Next() {
+		var i SearchMemoriesRow
+		if err := rows.Scan(&i.ID, &i.Kind, &i.Text); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setSandboxAwake = `-- name: SetSandboxAwake :one
 UPDATE sandboxes SET slot = $2, vm_ip = $3, status = 'awake'
 WHERE id = $1
@@ -601,6 +1056,31 @@ func (q *Queries) TryStartSleep(ctx context.Context, arg TryStartSleepParams) (i
 	return result.RowsAffected(), nil
 }
 
+const updateMemory = `-- name: UpdateMemory :execrows
+UPDATE memories SET text = $2, importance = $3, expires_at = $4, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateMemoryParams struct {
+	ID         uuid.UUID
+	Text       string
+	Importance int32
+	ExpiresAt  pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateMemory(ctx context.Context, arg UpdateMemoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateMemory,
+		arg.ID,
+		arg.Text,
+		arg.Importance,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateSessionTitle = `-- name: UpdateSessionTitle :one
 UPDATE sessions SET title = $2 WHERE id = $1
 RETURNING id, user_id, title, created_at
@@ -628,4 +1108,34 @@ func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitle
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const upsertSkill = `-- name: UpsertSkill :one
+INSERT INTO skills (id, user_id, name, description, content)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (user_id, name) DO UPDATE
+SET description = $4, content = $5, updated_at = now()
+RETURNING id
+`
+
+type UpsertSkillParams struct {
+	ID          uuid.UUID
+	UserID      string
+	Name        string
+	Description string
+	Content     string
+}
+
+// 同名覆盖写：技能按 (user_id, name) 唯一，add/update 都走这里。
+func (q *Queries) UpsertSkill(ctx context.Context, arg UpsertSkillParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertSkill,
+		arg.ID,
+		arg.UserID,
+		arg.Name,
+		arg.Description,
+		arg.Content,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }

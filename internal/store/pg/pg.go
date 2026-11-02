@@ -6,7 +6,9 @@ package pg
 
 import (
 	"context"
+	"crypto/md5"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -75,7 +77,7 @@ func (p *PG) ApplySchema(ctx context.Context) error {
 
 // ResetSchema 仅测试用：drop 后重建。
 func (p *PG) ResetSchema(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS messages, sessions, sandboxes"); err != nil {
+	if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS messages, sessions, sandboxes, memories, skills, memory_ops"); err != nil {
 		return err
 	}
 	return p.ApplySchema(ctx)
@@ -394,4 +396,303 @@ func (p *PG) ListMessages(ctx context.Context, sessionID uuid.UUID, afterSeq int
 		})
 	}
 	return out, nil
+}
+
+// ===== M5 记忆与技能（spec: 2026-11-02-m5-memory-design.md；选型 ADR-0002）=====
+
+// 记忆类型。"记忆是信息不是指令"（讲座 30）：事实在这里，流程在 skills 表。
+const (
+	MemoryTypeProfile = "profile"
+	MemoryTypeLog     = "log"
+	MemoryTypeNote    = "note"
+)
+
+type Memory struct {
+	ID         uuid.UUID
+	UserID     string
+	Type       string
+	Text       string
+	Importance int32
+	Hash       string
+	ExpiresAt  *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type Skill struct {
+	ID          uuid.UUID
+	UserID      string
+	Name        string
+	Description string
+	Content     string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// SkillCatalogEntry 注入清单项：只有 name+description，全文靠 memory_read 按需读。
+type SkillCatalogEntry struct {
+	Name        string
+	Description string
+}
+
+// SearchHit memory_search 的命中行（记忆或技能）。
+type SearchHit struct {
+	ID   uuid.UUID
+	Kind string // memory / skill
+	Text string
+}
+
+func memoryRow(m gen.Memory) Memory {
+	out := Memory{
+		ID: m.ID, UserID: m.UserID, Type: m.Type, Text: m.Text,
+		Importance: m.Importance, Hash: m.Hash,
+		CreatedAt: m.CreatedAt.Time, UpdatedAt: m.UpdatedAt.Time,
+	}
+	if m.ExpiresAt.Valid {
+		t := m.ExpiresAt.Time
+		out.ExpiresAt = &t
+	}
+	return out
+}
+
+func memoryRows(rows []gen.Memory) []Memory {
+	out := make([]Memory, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, memoryRow(r))
+	}
+	return out
+}
+
+func (p *PG) ListProfileMemories(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := p.q.ListProfileMemories(ctx, userID)
+	return memoryRows(rows), err
+}
+
+func (p *PG) ListRecentLogMemories(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := p.q.ListRecentLogMemories(ctx, userID)
+	return memoryRows(rows), err
+}
+
+func (p *PG) ListActiveNotes(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := p.q.ListActiveNotes(ctx, userID)
+	return memoryRows(rows), err
+}
+
+// ListAllMemoriesForUser 提取上下文：全部未消退记忆（过期 note 不给提取模型看——"只能删见过的"）。
+func (p *PG) ListAllMemoriesForUser(ctx context.Context, userID string) ([]Memory, error) {
+	rows, err := p.q.ListAllMemoriesForUser(ctx, userID)
+	return memoryRows(rows), err
+}
+
+func (p *PG) GetMemoryByID(ctx context.Context, id uuid.UUID) (Memory, error) {
+	r, err := p.q.GetMemoryByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Memory{}, ErrNotFound
+	}
+	if err != nil {
+		return Memory{}, err
+	}
+	return memoryRow(r), nil
+}
+
+func (p *PG) ListSkillCatalog(ctx context.Context, userID string) ([]SkillCatalogEntry, error) {
+	rows, err := p.q.ListSkillCatalog(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SkillCatalogEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, SkillCatalogEntry{Name: r.Name, Description: r.Description})
+	}
+	return out, nil
+}
+
+func (p *PG) GetSkillByName(ctx context.Context, userID, name string) (Skill, error) {
+	r, err := p.q.GetSkillByName(ctx, gen.GetSkillByNameParams{UserID: userID, Name: name})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Skill{}, ErrNotFound
+	}
+	if err != nil {
+		return Skill{}, err
+	}
+	return Skill{ID: r.ID, UserID: r.UserID, Name: r.Name, Description: r.Description,
+		Content: r.Content, CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time}, nil
+}
+
+// SearchMemories memory_search 工具后端（v1 关键词 ILIKE；向量检索留作演进，ADR-0002）。
+func (p *PG) SearchMemories(ctx context.Context, userID, query string, limit int32) ([]SearchHit, error) {
+	rows, err := p.q.SearchMemories(ctx, gen.SearchMemoriesParams{UserID: userID, Column2: pgtype.Text{String: query, Valid: true}, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SearchHit, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, SearchHit{ID: r.ID, Kind: r.Kind, Text: r.Text})
+	}
+	return out, nil
+}
+
+// ListTurnMessages pass 的提取原料：本轮消息。turn_id 仅 assistant 行有，用户消息靠 batch seq 兜。
+func (p *PG) ListTurnMessages(ctx context.Context, sessionID uuid.UUID, turnID string, batchSeqs []int64) ([]Message, error) {
+	rows, err := p.q.ListTurnMessages(ctx, gen.ListTurnMessagesParams{
+		SessionID: sessionID,
+		TurnID:    pgtype.Text{String: turnID, Valid: turnID != ""},
+		Column3:   batchSeqs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Message{
+			SessionID: r.SessionID, Seq: r.Seq, Kind: r.Kind, Content: r.Content,
+			MsgID: r.MsgID, TurnID: r.TurnID.String, CreatedAt: r.CreatedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// MemoryOp 一次记忆写操作（memory pass 产出 / agent memory_save 直写）。
+type MemoryOp struct {
+	Op          string    // add / update / delete
+	TargetType  string    // memory / skill
+	TargetID    uuid.UUID // update/delete memory 的目标
+	Type        string    // add memory：profile / log / note
+	Text        string
+	Importance  int32
+	TTLMinutes  *int32 // note 的消退时长（转成 expires_at）
+	Name        string // skill
+	Description string // skill
+	Content     string // skill 全文
+}
+
+// ApplyMemoryOps 事务内逐条应用 ops，每条配一行 memory_ops 审计（成对出现，spec Boundary）。
+// 宽容 LLM 产出：update/delete 目标不存在 = 跳过（可能对着已删编号发指令，不炸整批）；
+// add 撞 hash（同文本已在库）= 去重跳过不审计。返回实际应用条数。
+func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, source string) (int, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	q := p.q.WithTx(tx)
+
+	audit := func(op MemoryOp, targetID *uuid.UUID, before, after string) error {
+		return q.InsertMemoryOp(ctx, gen.InsertMemoryOpParams{
+			UserID:     userID,
+			Op:         op.Op,
+			TargetType: op.TargetType,
+			TargetID:   targetID,
+			BeforeText: pgtype.Text{String: before, Valid: before != ""},
+			AfterText:  pgtype.Text{String: after, Valid: after != ""},
+			Source:     source,
+		})
+	}
+
+	applied := 0
+	for _, op := range ops {
+		switch {
+		case op.Op == "add" && op.TargetType == "memory":
+			id, err := uuid.NewV7()
+			if err != nil {
+				return applied, fmt.Errorf("uuidv7: %w", err)
+			}
+			expires := pgtype.Timestamptz{}
+			if op.TTLMinutes != nil {
+				expires = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(*op.TTLMinutes) * time.Minute), Valid: true}
+			}
+			sum := md5.Sum([]byte(op.Text))
+			n, err := q.AddMemory(ctx, gen.AddMemoryParams{
+				ID: id, UserID: userID, Type: op.Type, Text: op.Text,
+				Importance: op.Importance, Hash: hex.EncodeToString(sum[:]), ExpiresAt: expires,
+			})
+			if err != nil {
+				return applied, err
+			}
+			if n == 0 {
+				continue // hash 去重：无事发生，不审计
+			}
+			if err := audit(op, &id, "", op.Text); err != nil {
+				return applied, err
+			}
+			applied++
+		case op.Op == "update" && op.TargetType == "memory":
+			old, err := q.GetMemoryByID(ctx, op.TargetID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return applied, err
+			}
+			expires := old.ExpiresAt
+			if op.TTLMinutes != nil {
+				expires = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(*op.TTLMinutes) * time.Minute), Valid: true}
+			}
+			n, err := q.UpdateMemory(ctx, gen.UpdateMemoryParams{
+				ID: op.TargetID, Text: op.Text, Importance: op.Importance, ExpiresAt: expires,
+			})
+			if err != nil {
+				return applied, err
+			}
+			if n == 0 {
+				continue
+			}
+			if err := audit(op, &op.TargetID, old.Text, op.Text); err != nil {
+				return applied, err
+			}
+			applied++
+		case op.Op == "delete" && op.TargetType == "memory":
+			old, err := q.GetMemoryByID(ctx, op.TargetID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return applied, err
+			}
+			if _, err := q.DeleteMemory(ctx, op.TargetID); err != nil {
+				return applied, err
+			}
+			if err := audit(op, &op.TargetID, old.Text, ""); err != nil {
+				return applied, err
+			}
+			applied++
+		case (op.Op == "add" || op.Op == "update") && op.TargetType == "skill":
+			var before string
+			if old, err := q.GetSkillByName(ctx, gen.GetSkillByNameParams{UserID: userID, Name: op.Name}); err == nil {
+				before = old.Content
+			}
+			id, err := uuid.NewV7()
+			if err != nil {
+				return applied, fmt.Errorf("uuidv7: %w", err)
+			}
+			realID, err := q.UpsertSkill(ctx, gen.UpsertSkillParams{
+				ID: id, UserID: userID, Name: op.Name, Description: op.Description, Content: op.Content,
+			})
+			if err != nil {
+				return applied, err
+			}
+			if err := audit(op, &realID, before, op.Content); err != nil {
+				return applied, err
+			}
+			applied++
+		case op.Op == "delete" && op.TargetType == "skill":
+			old, err := q.GetSkillByName(ctx, gen.GetSkillByNameParams{UserID: userID, Name: op.Name})
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return applied, err
+			}
+			if _, err := q.DeleteSkill(ctx, gen.DeleteSkillParams{UserID: userID, Name: op.Name}); err != nil {
+				return applied, err
+			}
+			if err := audit(op, &old.ID, old.Content, ""); err != nil {
+				return applied, err
+			}
+			applied++
+		default:
+			// 未知 op/类型组合：跳过（对 LLM 产出宽容）
+		}
+	}
+	return applied, tx.Commit(ctx)
 }
