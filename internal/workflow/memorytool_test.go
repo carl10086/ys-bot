@@ -96,14 +96,19 @@ func TestExecMemoryTool_Validation(t *testing.T) {
 	sess, _ := db.CreateSession(ctx, "u-val", "t")
 	a := &Activities{PG: db}
 
+	// 校验/用法错误 = 模型可见的 exit_code=-1 输出，不是 activity error（后者被无限重试会卡死 turn）
 	for _, in := range []ExecMemoryToolInput{
-		{SessionID: sess.ID.String(), Name: "memory_nuke", Input: `{}`},                    // 未知工具
-		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"profile"}`},    // 缺 text
-		{SessionID: sess.ID.String(), Name: "memory_search", Input: `{"query":""}`},        // 空 query
+		{SessionID: sess.ID.String(), Name: "memory_nuke", Input: `{}`},                         // 未知工具
+		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"profile"}`},         // 缺 text
+		{SessionID: sess.ID.String(), Name: "memory_search", Input: `{"query":""}`},             // 空 query
 		{SessionID: sess.ID.String(), Name: "memory_read", Input: `{"kind":"memory","id":"x"}`}, // 坏 uuid
 	} {
-		if _, err := a.ExecMemoryTool(ctx, in); err == nil {
-			t.Fatalf("%s 应报参数错误: %+v", in.Name, in)
+		out, err := a.ExecMemoryTool(ctx, in)
+		if err != nil {
+			t.Fatalf("%s 校验错误不应是 activity error: %v", in.Name, err)
+		}
+		if !strings.Contains(out, `"exit_code":-1`) {
+			t.Fatalf("%s 应返回 exit_code=-1: %s", in.Name, out)
 		}
 	}
 }

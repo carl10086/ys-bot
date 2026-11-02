@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -54,21 +55,21 @@ func TestCallLLM_WithDriverGivesShell(t *testing.T) {
 }
 
 // ExecTool 入参校验：未知工具名 / 非法 input 都必须报错（不碰 Driver）。
+// M5 e2e 修订：工具参数/用法错误 = 模型可见的 exit_code=-1 输出（模型据此纠错），
+// 不是 activity error——后者被 Temporal 无限重试会卡死 turn。
 func TestExecTool_Validation(t *testing.T) {
 	a := &Activities{}
-	if _, err := a.ExecTool(context.Background(), ExecToolInput{
-		SandboxID: uuid.NewString(), Name: "nope", Input: `{}`,
-	}); err == nil {
-		t.Fatal("unknown tool 必须报错")
-	}
-	if _, err := a.ExecTool(context.Background(), ExecToolInput{
-		SandboxID: uuid.NewString(), Name: "shell", Input: `not json`,
-	}); err == nil {
-		t.Fatal("非法 input 必须报错")
-	}
-	if _, err := a.ExecTool(context.Background(), ExecToolInput{
-		SandboxID: uuid.NewString(), Name: "shell", Input: `{"cmd":""}`,
-	}); err == nil {
-		t.Fatal("空 cmd 必须报错")
+	for _, in := range []ExecToolInput{
+		{SandboxID: uuid.NewString(), Name: "nope", Input: `{}`},          // 未知工具
+		{SandboxID: uuid.NewString(), Name: "shell", Input: `not json`},   // 非法 input
+		{SandboxID: uuid.NewString(), Name: "shell", Input: `{"cmd":""}`}, // 空 cmd
+	} {
+		out, err := a.ExecTool(context.Background(), in)
+		if err != nil {
+			t.Fatalf("%v 不应是 activity error: %v", in, err)
+		}
+		if !strings.Contains(out, `"exit_code":-1`) {
+			t.Fatalf("%v 应返回 exit_code=-1: %s", in, out)
+		}
 	}
 }

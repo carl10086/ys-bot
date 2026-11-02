@@ -223,7 +223,7 @@ const execOutputMax = 10 * 1024
 // ExecTool 经 driver 在 VM 里执行，返回 JSON {"exit_code","stdout","stderr"}。
 func (a *Activities) ExecTool(ctx context.Context, in ExecToolInput) (string, error) {
 	if in.Name != "shell" {
-		return "", fmt.Errorf("unknown tool %q", in.Name)
+		return toolFail("unknown tool %q", in.Name)
 	}
 	sbID, err := uuid.Parse(in.SandboxID)
 	if err != nil {
@@ -233,7 +233,7 @@ func (a *Activities) ExecTool(ctx context.Context, in ExecToolInput) (string, er
 		Cmd string `json:"cmd"`
 	}
 	if err := json.Unmarshal([]byte(in.Input), &args); err != nil || args.Cmd == "" {
-		return "", fmt.Errorf("shell 工具参数非法: %s", in.Input)
+		return toolFail("shell 工具参数非法: %s", in.Input)
 	}
 	// M4 续期：工具在执行 = VM 在干活。长命令期间持续续期是 never-mid-turn 的前提
 	// （spec Q2 硬约束：休眠阈值 N > 单工具 timeout）。
@@ -296,6 +296,15 @@ func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID stri
 	return err
 }
 
+
+// toolFail 工具参数/用法错误：返回模型可见的错误 JSON（exit_code=-1），**不是** activity error——
+// activity error 会被 Temporal 无限重试，校验错误重试无意义且会卡死 turn（M5 e2e 实测）。
+// 只有基础设施错误（PG 挂等）才应作为 activity error 返回。
+func toolFail(format string, args ...any) (string, error) {
+	b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": fmt.Sprintf(format, args...)})
+	return string(b), nil
+}
+
 // ===== M5 服务端记忆工具（spec Q6；不经 VM/agentd，第二条工具执行路径）=====
 
 type ExecMemoryToolInput struct {
@@ -331,7 +340,7 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 			Limit int32  `json:"limit"`
 		}
 		if err := json.Unmarshal([]byte(in.Input), &args); err != nil || args.Query == "" {
-			return "", fmt.Errorf("memory_search 参数非法: %s", in.Input)
+			return toolFail("memory_search 参数非法: %s", in.Input)
 		}
 		if args.Limit <= 0 {
 			args.Limit = 8
@@ -357,28 +366,34 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 			ID   string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(in.Input), &args); err != nil {
-			return "", fmt.Errorf("memory_read 参数非法: %s", in.Input)
+			return toolFail("memory_read 参数非法: %s", in.Input)
 		}
 		id, err := uuid.Parse(args.ID)
 		if err != nil {
-			return "", fmt.Errorf("memory_read 的 id 不是 uuid: %s", args.ID)
+			return toolFail("memory_read 的 id 不是 uuid: %s", args.ID)
 		}
 		var b []byte
 		switch args.Kind {
 		case "memory":
 			m, err := a.PG.GetMemoryByID(ctx, id)
+			if errors.Is(err, pg.ErrNotFound) {
+				return toolFail("记忆不存在（id 可能过期或幻觉）: %s", args.ID)
+			}
 			if err != nil {
 				return "", err
 			}
 			b, _ = json.Marshal(map[string]any{"kind": "memory", "type": m.Type, "text": m.Text})
 		case "skill":
 			sk, err := a.PG.GetSkillByID(ctx, id)
+			if errors.Is(err, pg.ErrNotFound) {
+				return toolFail("技能不存在（id 可能过期或幻觉）: %s", args.ID)
+			}
 			if err != nil {
 				return "", err
 			}
 			b, _ = json.Marshal(map[string]any{"kind": "skill", "name": sk.Name, "content": sk.Content})
 		default:
-			return "", fmt.Errorf("memory_read 的 kind 非法: %q", args.Kind)
+			return toolFail("memory_read 的 kind 非法: %q", args.Kind)
 		}
 		return string(b), nil
 
@@ -393,7 +408,7 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 			Content     string `json:"content"`
 		}
 		if err := json.Unmarshal([]byte(in.Input), &args); err != nil {
-			return "", fmt.Errorf("memory_save 参数非法: %s", in.Input)
+			return toolFail("memory_save 参数非法: %s", in.Input)
 		}
 		if args.Importance == 0 {
 			args.Importance = 5
@@ -401,13 +416,13 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 		op := pg.MemoryOp{Op: "add", Importance: args.Importance, TTLMinutes: args.TTLMinutes}
 		if args.Type == "skill" {
 			if args.Name == "" || args.Content == "" {
-				return "", fmt.Errorf("memory_save skill 缺 name/content: %s", in.Input)
+				return toolFail("memory_save skill 缺 name/content: %s", in.Input)
 			}
 			op.TargetType = "skill"
 			op.Name, op.Description, op.Content = args.Name, args.Description, args.Content
 		} else {
 			if args.Text == "" || (args.Type != "profile" && args.Type != "log" && args.Type != "note") {
-				return "", fmt.Errorf("memory_save 缺 text 或 type 非法: %s", in.Input)
+				return toolFail("memory_save 缺 text 或 type 非法: %s", in.Input)
 			}
 			op.TargetType = "memory"
 			op.Type, op.Text = args.Type, args.Text
@@ -420,6 +435,6 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 		return string(b), nil
 
 	default:
-		return "", fmt.Errorf("unknown memory tool %q", in.Name)
+		return toolFail("unknown memory tool %q", in.Name)
 	}
 }
