@@ -1,9 +1,27 @@
 # M5 设计：记忆与技能（memory/skills）
 
-> 状态：2026-11-02 访谈定稿（存什么 → 怎么用 → 存储选型，全程对齐 Grok Bot 讲座与四个开源系统调研）。
+> 状态：2026-11-02 访谈定稿（存什么 → 怎么用 → 存储选型，全程对齐 Grok Bot 讲座与四个开源系统调研）；**2026-11-02 已实现**（验收 1–7 全过，见下）。
 > 上游文档：`CONTEXT.md`（M5 术语）、`docs/adr/0002-memory-in-pg-not-files.md`、
 > Grok Bot 讲座 §08/§18/§30（`docs/reference/cs146s-grokbot-lecture.html`）、
 > 调研对比页（OpenViking / OpenClaw / Mem0 / Hermes 的提取-存储-检索设计）。
+>
+> **实现期修订（e2e 踩出）**：
+> 1. **工具校验/用法错误不能是 activity error**——Temporal 默认无限重试会把 turn 卡死（实测模型发缺参
+>    `memory_save`，turn 卡到 Attempt 7+）。校验/NotFound 一律返回 `exit_code=-1` 的模型可见输出
+>   （模型看到会自己纠错，实测即自愈）；只有基础设施错误（PG 挂）才配当 activity error。
+>    `ExecTool` 同类 M2 遗留一并修。
+> 2. MemoryPassWorkflow 的 activity 重试**封顶 3 次**——每次重试都是一次真实 LLM 调用（token 成本），
+>    持续性失败重试无益（pass 本就是优化）。
+> 3. `MEMORY_BASE_URL` 独立 env（缺省回落 LLM_BASE_URL）——验收 6 需要只打残提取链路；
+>    也为将来提取模型走不同网关留了口。
+>
+> **验收证据（本地 server+worker + 152 PG，2026-11-02；全程不需 VM）**：
+> ① 会话 A 说偏好 → 新会话 B 回复"你是 Go 后端工程师。你偏好简短直接的回答……"
+> ② `memory_ops` 有 add（source=agent）与 delete（source=pass:turn:…）审计行
+> ③ 更正偏好：agent 先 add 新文本 → pass 裁决 delete 旧行 → 终态一行不并存
+> ④ `memory_save` applied=1 立即落库 ⑤ 真模型调 `memory_search("回答")` 命中并正确转述
+> ⑥ MEMORY_BASE_URL 指死端口：ExtractMemories 重试 3 次放弃，turn 回复完全正常
+> ⑦ note ttl=1min：expires_at 落库，过期后活跃查询=0（不进注入）
 
 ## Objective（目标与验收）
 

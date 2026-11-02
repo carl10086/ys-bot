@@ -50,7 +50,7 @@ func main() {
 	// M5：提取专用实例——便宜模型 + 固定 system=ExtractPrompt（构造期固定 system 正好匹配一次性提取）。
 	memAg, err := agent.NewFantasy(agent.Config{
 		Provider: envOr("LLM_PROVIDER", "openai"),
-		BaseURL:  envOr("LLM_BASE_URL", "https://api.openai.com/v1"),
+		BaseURL:  envOr("MEMORY_BASE_URL", envOr("LLM_BASE_URL", "https://api.openai.com/v1")),
 		APIKey:   os.Getenv("LLM_API_KEY"),
 		Model:    envOr("MEMORY_MODEL", envOr("LLM_MODEL", "gpt-4o-mini")),
 		System:   workflow.ExtractPrompt,

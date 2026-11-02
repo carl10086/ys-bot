@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"ys-sandbox/internal/agent"
@@ -45,7 +46,12 @@ type MemoryPassInput struct {
 // MemoryPassWorkflow turn 后的记忆整理。任何一步失败 = 整个 pass 失败重试/记日志，
 // 绝不影响已经完成的回复（调用方容错）。
 func MemoryPassWorkflow(ctx workflow.Context, in MemoryPassInput) error {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 2 * time.Minute})
+	// 重试封顶 3 次：每次提取重试都是一次真实 LLM 调用（token 成本），
+	// 持续性失败（模型配置错等）重试无益，失败即放弃——pass 本就是优化（spec Q4）。
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
 	logger := workflow.GetLogger(ctx)
 
 	var msgs []pg.Message
