@@ -20,11 +20,12 @@ import (
 
 // Activities TurnWorkflow 的全部副作用。每步落库 / 空信号 = 讲座 15 黑条的实现。
 type Activities struct {
-	PG     *pg.PG
-	Redis  *redis.Redis
-	Agent  agent.Agent
-	Driver vmdriver.Driver // nil = 无工具环境（M1 行为）
-	TC     client.Client   // M4：sweep 从 activity 里起 SleepWorkflow（sleep.go 头注释有原因）
+	PG          *pg.PG
+	Redis       *redis.Redis
+	Agent       agent.Agent
+	Driver      vmdriver.Driver // nil = 无工具环境（M1 行为）
+	TC          client.Client   // M4：sweep 从 activity 里起 SleepWorkflow（sleep.go 头注释有原因）
+	MemoryAgent agent.Agent     // M5：提取专用 LLM 实例（System=ExtractPrompt）；nil = 记忆功能关闭
 }
 
 // DrainQueue 取走会话队列里待处理的一批消息（seq 列表）。队列可丢：消息已在 PG。

@@ -46,6 +46,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("agent: %v", err)
 	}
+	// M5：提取专用实例——便宜模型 + 固定 system=ExtractPrompt（构造期固定 system 正好匹配一次性提取）。
+	memAg, err := agent.NewFantasy(agent.Config{
+		Provider: envOr("LLM_PROVIDER", "openai"),
+		BaseURL:  envOr("LLM_BASE_URL", "https://api.openai.com/v1"),
+		APIKey:   os.Getenv("LLM_API_KEY"),
+		Model:    envOr("MEMORY_MODEL", envOr("LLM_MODEL", "gpt-4o-mini")),
+		System:   workflow.ExtractPrompt,
+	})
+	if err != nil {
+		log.Fatalf("memory agent: %v", err)
+	}
 
 	c, err := client.Dial(client.Options{HostPort: envOr("TEMPORAL_ADDR", "localhost:7233")})
 	if err != nil {
@@ -69,6 +80,7 @@ func main() {
 	w.RegisterWorkflow(workflow.TurnWorkflow)
 	w.RegisterWorkflow(workflow.SleepSweepWorkflow)
 	w.RegisterWorkflow(workflow.SleepWorkflow)
+	w.RegisterWorkflow(workflow.MemoryPassWorkflow)
 	// VM 工具环境（M2）：VM_DRIVER=remote 时启用；缺省无 Driver = M1 纯对话行为。
 	var drv vmdriver.Driver
 	if os.Getenv("VM_DRIVER") == "remote" {
@@ -76,7 +88,7 @@ func main() {
 		log.Print("VM_DRIVER=remote，shell 工具已启用")
 		ensureSleepSchedule(ctx, c, envInt("SLEEP_IDLE_MINUTES", 10))
 	}
-	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv, TC: c})
+	w.RegisterActivity(&workflow.Activities{PG: pgStore, Redis: rdb, Agent: ag, Driver: drv, TC: c, MemoryAgent: memAg})
 
 	log.Printf("listening on task queue %q", workflow.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
