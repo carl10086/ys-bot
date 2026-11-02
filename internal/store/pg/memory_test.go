@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -294,5 +295,56 @@ func TestPG_ListTurnMessages(t *testing.T) {
 	}
 	if msgs[0].Seq != userSeq || msgs[1].Seq != asSeq {
 		t.Fatalf("顺序应按 seq 升序: %d, %d", msgs[0].Seq, msgs[1].Seq)
+	}
+}
+
+// I1：并发 pass 写入同一 user——advisory lock 保证写入阶段串行，不产生矛盾终态。
+func TestPG_ApplyMemoryOps_ConcurrentSameUser(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+
+	// 预置一条记忆
+	if _, err := db.ApplyMemoryOps(ctx, "u-conc", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "住在 Austin", Importance: 5},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	mems, _ := db.ListProfileMemories(ctx, "u-conc")
+	targetID := mems[0].ID
+
+	// 两个并发事务：一个 update，一个 delete 同一行
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := db.ApplyMemoryOps(ctx, "u-conc", []MemoryOp{
+			{Op: "update", TargetType: "memory", TargetID: targetID, Text: "住在 Seattle", Importance: 8},
+		}, "pass:A")
+		if err != nil {
+			t.Errorf("pass A: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := db.ApplyMemoryOps(ctx, "u-conc", []MemoryOp{
+			{Op: "delete", TargetType: "memory", TargetID: targetID},
+		}, "pass:B")
+		if err != nil {
+			t.Errorf("pass B: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	// 终态：要么被 delete（行消失），要么被 update（行在且文本新）——不能出现"已删行被 update 复活"
+	mems, _ = db.ListProfileMemories(ctx, "u-conc")
+	if len(mems) > 1 {
+		t.Fatalf("不应有多行: %d", len(mems))
+	}
+	if len(mems) == 1 && mems[0].Text != "住在 Seattle" {
+		t.Fatalf("若行还在，文本应是更新后的: %q", mems[0].Text)
+	}
+	// 审计：两个 pass 的操作都应有记录（串行执行，各记各的）
+	if got := countOps(t, db, "u-conc"); got < 2 {
+		t.Fatalf("audit rows = %d, want >=2", got)
 	}
 }

@@ -169,5 +169,5 @@ ops 应用必须事务 + 审计成对出现；workflow 起子任务走 activity 
 ## Open Questions
 
 - profile 写满（>100 条）时：v1 注入侧截断 + 依赖 pass 的 update/delete 瘦身；是否学 Hermes"写满报错倒逼合并"留作运营后的真实 bad case 再定。
-- 连续 turn 时两个 pass 可能重叠写库：v1 靠事务 + hash 去重兜底；要严格可改 per-user WorkflowID 串行，留作优化。
+- 连续 turn 时两个 pass 可能重叠写库：**已修（review I1）**——`ApplyMemoryOps` 事务开头加 per-user advisory lock（`pg_advisory_xact_lock(hashtext(userID))`），写入阶段串行；并发测试覆盖"update+delete 同一行"竞态。
 - `MEMORY_MODEL` 的具体选型（哪家的便宜档）在实现期按现有 LLM 配置定，不定死。

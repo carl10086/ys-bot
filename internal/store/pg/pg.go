@@ -569,12 +569,18 @@ type MemoryOp struct {
 // ApplyMemoryOps 事务内逐条应用 ops，每条配一行 memory_ops 审计（成对出现，spec Boundary）。
 // 宽容 LLM 产出：update/delete 目标不存在 = 跳过（可能对着已删编号发指令，不炸整批）；
 // add 撞 hash（同文本已在库）= 去重跳过不审计。返回实际应用条数。
+// I1：事务开头按 userID 加 advisory lock——同一 user 的并发 pass 在写入阶段串行，
+// 先提交的赢，后提交的基于已更新的库裁决（消解"并发 delete+update 同一行"竞态）。
 func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, source string) (int, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	// per-user 事务级 advisory lock（commit/rollback 自动释放）
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", userID); err != nil {
+		return 0, fmt.Errorf("memory pass lock: %w", err)
+	}
 	q := p.q.WithTx(tx)
 
 	audit := func(op MemoryOp, targetID *uuid.UUID, before, after string) error {
