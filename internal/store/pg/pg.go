@@ -658,7 +658,11 @@ func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, 
 			applied++
 		case (op.Op == "add" || op.Op == "update") && op.TargetType == "skill":
 			var before string
-			if old, err := q.GetSkillByName(ctx, gen.GetSkillByNameParams{UserID: userID, Name: op.Name}); err == nil {
+			old, err := q.GetSkillByName(ctx, gen.GetSkillByNameParams{UserID: userID, Name: op.Name})
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return applied, err // 真错误不能吞——否则审计 before 会记成空串（review S1）
+			}
+			if err == nil {
 				before = old.Content
 			}
 			id, err := uuid.NewV7()

@@ -40,7 +40,7 @@
 
 **明确不做**（写死，防 scope 蔓延）：
 
-- 向量检索 / embedding（schema 预留演进路径，不实现；v1 检索 = SQL 关键词）
+- 向量检索 / embedding（schema 预留演进路径，不实现；v1 检索 = SQL 关键词 ILIKE。**已知弱点**：中文无词边界，"回答"≠"回复"这类同义召回接不住——e2e 验收 5 命中是运气好，别当能力看）
 - importance 衰减排序、MMR 多样性（importance 字段照存，排序只用 importance DESC + 时间）
 - 后台整理合并（OpenClaw dreaming / OpenViking ov compile——出现真实臃肿 bad case 再做）
 - SendToUser 工具（"文本即回复"语义不变；属事件唤醒时代的前置改造，已进 CONTEXT.md 停车场）

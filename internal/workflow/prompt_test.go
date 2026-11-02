@@ -3,6 +3,7 @@ package workflow
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"ys-sandbox/internal/store/pg"
 )
@@ -43,5 +44,28 @@ func TestBuildSystemPrompt_ProfileTruncated(t *testing.T) {
 	}
 	if !strings.Contains(out, "截断") {
 		t.Fatal("截断应有标记（记忆不只这些）")
+	}
+}
+
+// S5：中文按 rune 截断，不按字节——4000 rune 的中文 ≈ 12000 字节，字节级会砍到 1/3。
+func TestBuildSystemPrompt_ChineseTruncation(t *testing.T) {
+	// 每条 50 个汉字 = 50 rune；200 条 = 10000 rune > 4000
+	var prof []pg.Memory
+	for i := 0; i < 200; i++ {
+		prof = append(prof, pg.Memory{Text: strings.Repeat("记", 50), Importance: 5})
+	}
+	out := buildSystemPrompt("BASE", prof, nil, nil, nil)
+	// rune 计长：应包含约 4000/52 ≈ 76 条（每条 "- " + 50 字 + "\n" = 52 rune）
+	// 字节计长只能装 4000/152 ≈ 26 条
+	count := strings.Count(out, strings.Repeat("记", 50))
+	if count < 60 || count > 90 {
+		t.Fatalf("rune 截断应装 ~76 条，got %d", count)
+	}
+	if !strings.Contains(out, "截断") {
+		t.Fatal("截断应有标记")
+	}
+	// 输出必须是合法 UTF-8（不能切出半个汉字）
+	if !utf8.ValidString(out) {
+		t.Fatal("截断产生了非法 UTF-8")
 	}
 }

@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 -- 审计流水：每次记忆写操作留痕（"它为什么记住了这个"必须可追溯）。
+-- 保留策略待定：按 M5 体量（每天几十轮 × 几 ops）一年几十万行，现在不是事；
+-- 数据量起来后按 created_at 分区或定期归档（同 M4 快照"只留最新"的生命周期意识）。
 CREATE TABLE IF NOT EXISTS memory_ops (
   id          bigserial PRIMARY KEY,
   user_id     text NOT NULL,

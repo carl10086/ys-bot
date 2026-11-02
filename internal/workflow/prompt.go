@@ -23,15 +23,16 @@ func buildSystemPrompt(base string, profile, logs, notes []pg.Memory, skills []p
 
 	if len(profile) > 0 {
 		b.WriteString("\n\n# 关于用户的记忆\n")
+		// rune 计长（review S5）：字节截断对中文只有 1/3 容量，且会切出半个 UTF-8
 		n := 0
 		truncated := false
 		for _, m := range profile {
-			line := "- " + m.Text + "\n"
+			line := []rune("- " + m.Text + "\n")
 			if n+len(line) > profilePromptMax {
 				truncated = true
 				break
 			}
-			b.WriteString(line)
+			b.WriteString(string(line))
 			n += len(line)
 		}
 		if truncated {

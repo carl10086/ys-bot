@@ -5,7 +5,6 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
@@ -113,7 +112,7 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		// M5：只有 VM 工具（shell）才懒唤醒；memory_* 走服务端路径，纯记忆对话不碰 VM
 		needsVM := false
 		for _, tc := range res.ToolCalls {
-			if !strings.HasPrefix(tc.Name, "memory_") {
+			if !isMemoryTool(tc.Name) {
 				needsVM = true
 				break
 			}
@@ -134,7 +133,7 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 
 			var out string
 			var toolErr error
-			if strings.HasPrefix(tc.Name, "memory_") {
+			if isMemoryTool(tc.Name) {
 				// 服务端工具：不经 VM（spec Q6）
 				toolErr = workflow.ExecuteActivity(ctx, "ExecMemoryTool", ExecMemoryToolInput{
 					SessionID: in.SessionID, Name: tc.Name, Input: tc.Input,

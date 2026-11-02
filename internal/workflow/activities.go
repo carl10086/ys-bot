@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.temporal.io/api/enums/v1"
@@ -181,6 +182,12 @@ var memoryToolDefs = []agent.ToolDef{
 			"required": []string{"type"},
 		},
 	},
+}
+
+// isMemoryTool 工具路由判定：memory_* 前缀 = 服务端执行（不经 VM/agentd）。
+// 收敛在一个函数里——turn.go 的分派与 CallLLM 的工具列表用同一判据（review S2）。
+func isMemoryTool(name string) bool {
+	return strings.HasPrefix(name, "memory_")
 }
 
 func (a *Activities) CallLLM(ctx context.Context, history []agent.Message) (agent.StepResult, error) {
