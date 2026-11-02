@@ -25,25 +25,31 @@ func (fakeDriver) Exec(context.Context, uuid.UUID, string, uint32) (int32, strin
 }
 func (fakeDriver) SleepVM(context.Context, uuid.UUID) error { return nil }
 
-// 懒唤醒门控：Driver=nil（无 VM 环境）时 CallLLM 不得把工具给模型。
+// 懒唤醒门控：Driver=nil（无 VM 环境）时 CallLLM 不给 VM 工具；
+// M5 起 memory_* 服务端工具始终可用（纯对话也要能记，spec Q6）。
 func TestCallLLM_NoDriverNoTools(t *testing.T) {
 	fa := &fakeAgent{}
 	if _, err := (&Activities{Agent: fa}).CallLLM(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(fa.gotTools) != 0 {
-		t.Fatalf("Driver=nil 时 tools 应为空，got %v", fa.gotTools)
+	for _, tool := range fa.gotTools {
+		if tool.Name == "shell" {
+			t.Fatalf("Driver=nil 时不应给 shell，got %v", fa.gotTools)
+		}
+	}
+	if len(fa.gotTools) != len(memoryToolDefs) {
+		t.Fatalf("Driver=nil 时应只有 memory 工具，got %v", fa.gotTools)
 	}
 }
 
-// 有 Driver 时给 shell 工具（M2 唯一工具）。
+// 有 Driver 时追加 shell 工具（memory 工具仍在）。
 func TestCallLLM_WithDriverGivesShell(t *testing.T) {
 	fa := &fakeAgent{}
 	if _, err := (&Activities{Agent: fa, Driver: fakeDriver{}}).CallLLM(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(fa.gotTools) != 1 || fa.gotTools[0].Name != "shell" {
-		t.Fatalf("want [shell]，got %v", fa.gotTools)
+	if len(fa.gotTools) != len(memoryToolDefs)+1 || fa.gotTools[len(fa.gotTools)-1].Name != "shell" {
+		t.Fatalf("want memory 三工具 + shell，got %v", fa.gotTools)
 	}
 }
 

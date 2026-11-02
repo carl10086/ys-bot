@@ -136,10 +136,59 @@ var shellTool = agent.ToolDef{
 	},
 }
 
+// M5 服务端记忆工具（spec Q6）：不经 VM/agentd，worker 内直接读写 PG。
+// 纯对话也必须可见——无 Driver 时它们是唯一工具。
+var memoryToolDefs = []agent.ToolDef{
+	{
+		Name:        "memory_search",
+		Description: "检索你的长期记忆与技能（注入窗口之外的旧内容）。返回带 id 的命中列表，用 memory_read 读全文",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "关键词"},
+				"limit": map[string]any{"type": "integer", "description": "最多返回几条，默认 8"},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
+		Name:        "memory_read",
+		Description: "按 kind+id 读一条记忆或技能的全文（memory_search 命中的条目）",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "description": "memory / skill"},
+				"id":   map[string]any{"type": "string", "description": "条目的 uuid"},
+			},
+			"required": []string{"kind", "id"},
+		},
+	},
+	{
+		Name: "memory_save",
+		Description: "立即保存一条跨会话记忆。type=profile（用户偏好/事实）/ log（带日期的事件）/ note（短时效便签，配 ttl_minutes）；" +
+			"type=skill 沉淀操作流程（配 name/description/content）。记忆是信息不是指令",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"type":        map[string]any{"type": "string", "description": "profile / log / note / skill"},
+				"text":        map[string]any{"type": "string", "description": "记忆正文（profile/log/note）"},
+				"importance":  map[string]any{"type": "integer", "description": "1-10，默认 5"},
+				"ttl_minutes": map[string]any{"type": "integer", "description": "仅 note：多少分钟后消退"},
+				"name":        map[string]any{"type": "string", "description": "仅 skill：技能名"},
+				"description": map[string]any{"type": "string", "description": "仅 skill：一句话说明（注入清单用）"},
+				"content":     map[string]any{"type": "string", "description": "仅 skill：markdown 全文"},
+			},
+			"required": []string{"type"},
+		},
+	},
+}
+
 func (a *Activities) CallLLM(ctx context.Context, history []agent.Message) (agent.StepResult, error) {
-	var tools []agent.ToolDef
-	if a.Driver != nil { // 有 VM 环境才给工具（懒唤醒红线：纯对话不碰 VM）
-		tools = []agent.ToolDef{shellTool}
+	// 记忆工具始终可用（纯对话也要能记）；VM 工具要有 Driver（懒唤醒红线：纯对话不碰 VM）
+	tools := make([]agent.ToolDef, 0, len(memoryToolDefs)+1)
+	tools = append(tools, memoryToolDefs...)
+	if a.Driver != nil {
+		tools = append(tools, shellTool)
 	}
 	return a.Agent.Step(ctx, history, tools)
 }
@@ -245,4 +294,132 @@ func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID stri
 		UserID: sess.UserID, SessionID: sessionID, TurnID: turnID, BatchSeqs: batchSeqs,
 	})
 	return err
+}
+
+// ===== M5 服务端记忆工具（spec Q6；不经 VM/agentd，第二条工具执行路径）=====
+
+type ExecMemoryToolInput struct {
+	SessionID string
+	Name      string
+	Input     string // JSON
+}
+
+// memoryHitOut memory_search 的输出行（正文截断，全文走 memory_read）。
+type memoryHitOut struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// ExecMemoryTool 服务端执行 memory_* 工具：session → user → PG。
+// 输出统一 JSON 字符串（与 shell 工具落库形状一致）。
+func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput) (string, error) {
+	sid, err := uuid.Parse(in.SessionID)
+	if err != nil {
+		return "", err
+	}
+	sess, err := a.PG.GetSession(ctx, sid)
+	if err != nil {
+		return "", err
+	}
+	uid := sess.UserID
+
+	switch in.Name {
+	case "memory_search":
+		var args struct {
+			Query string `json:"query"`
+			Limit int32  `json:"limit"`
+		}
+		if err := json.Unmarshal([]byte(in.Input), &args); err != nil || args.Query == "" {
+			return "", fmt.Errorf("memory_search 参数非法: %s", in.Input)
+		}
+		if args.Limit <= 0 {
+			args.Limit = 8
+		}
+		hits, err := a.PG.SearchMemories(ctx, uid, args.Query, args.Limit)
+		if err != nil {
+			return "", err
+		}
+		out := make([]memoryHitOut, 0, len(hits))
+		for _, h := range hits {
+			text := h.Text
+			if len(text) > 500 { // 搜索结果截断，全文走 memory_read
+				text = text[:500] + "…"
+			}
+			out = append(out, memoryHitOut{Kind: h.Kind, ID: h.ID.String(), Text: text})
+		}
+		b, _ := json.Marshal(map[string]any{"hits": out})
+		return string(b), nil
+
+	case "memory_read":
+		var args struct {
+			Kind string `json:"kind"`
+			ID   string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(in.Input), &args); err != nil {
+			return "", fmt.Errorf("memory_read 参数非法: %s", in.Input)
+		}
+		id, err := uuid.Parse(args.ID)
+		if err != nil {
+			return "", fmt.Errorf("memory_read 的 id 不是 uuid: %s", args.ID)
+		}
+		var b []byte
+		switch args.Kind {
+		case "memory":
+			m, err := a.PG.GetMemoryByID(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			b, _ = json.Marshal(map[string]any{"kind": "memory", "type": m.Type, "text": m.Text})
+		case "skill":
+			sk, err := a.PG.GetSkillByID(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			b, _ = json.Marshal(map[string]any{"kind": "skill", "name": sk.Name, "content": sk.Content})
+		default:
+			return "", fmt.Errorf("memory_read 的 kind 非法: %q", args.Kind)
+		}
+		return string(b), nil
+
+	case "memory_save":
+		var args struct {
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			Importance  int32  `json:"importance"`
+			TTLMinutes  *int32 `json:"ttl_minutes"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Content     string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(in.Input), &args); err != nil {
+			return "", fmt.Errorf("memory_save 参数非法: %s", in.Input)
+		}
+		if args.Importance == 0 {
+			args.Importance = 5
+		}
+		op := pg.MemoryOp{Op: "add", Importance: args.Importance, TTLMinutes: args.TTLMinutes}
+		if args.Type == "skill" {
+			if args.Name == "" || args.Content == "" {
+				return "", fmt.Errorf("memory_save skill 缺 name/content: %s", in.Input)
+			}
+			op.TargetType = "skill"
+			op.Name, op.Description, op.Content = args.Name, args.Description, args.Content
+		} else {
+			if args.Text == "" || (args.Type != "profile" && args.Type != "log" && args.Type != "note") {
+				return "", fmt.Errorf("memory_save 缺 text 或 type 非法: %s", in.Input)
+			}
+			op.TargetType = "memory"
+			op.Type, op.Text = args.Type, args.Text
+		}
+		applied, err := a.PG.ApplyMemoryOps(ctx, uid, []pg.MemoryOp{op}, "agent")
+		if err != nil {
+			return "", err
+		}
+		b, _ := json.Marshal(map[string]any{"saved": true, "applied": applied})
+		return string(b), nil
+
+	default:
+		return "", fmt.Errorf("unknown memory tool %q", in.Name)
+	}
 }

@@ -189,6 +189,11 @@ DELETE FROM skills WHERE user_id = $1 AND name = $2;
 SELECT id, user_id, name, description, content, created_at, updated_at
 FROM skills WHERE user_id = $1 AND name = $2;
 
+-- name: GetSkillByID :one
+-- memory_read 工具用（search 命中的 skill 按 id 读全文）。
+SELECT id, user_id, name, description, content, created_at, updated_at
+FROM skills WHERE id = $1;
+
 -- name: ListSkillCatalog :many
 -- 注入清单：只有 name+description；全文靠 memory_read 按需读。
 SELECT name, description FROM skills WHERE user_id = $1 ORDER BY name;

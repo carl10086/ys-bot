@@ -281,6 +281,27 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (GetSessionRow, 
 	return i, err
 }
 
+const getSkillByID = `-- name: GetSkillByID :one
+SELECT id, user_id, name, description, content, created_at, updated_at
+FROM skills WHERE id = $1
+`
+
+// memory_read 工具用（search 命中的 skill 按 id 读全文）。
+func (q *Queries) GetSkillByID(ctx context.Context, id uuid.UUID) (Skill, error) {
+	row := q.db.QueryRow(ctx, getSkillByID, id)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Description,
+		&i.Content,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSkillByName = `-- name: GetSkillByName :one
 SELECT id, user_id, name, description, content, created_at, updated_at
 FROM skills WHERE user_id = $1 AND name = $2

@@ -696,3 +696,16 @@ func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, 
 	}
 	return applied, tx.Commit(ctx)
 }
+
+// GetSkillByID memory_read 工具用：按 id 读技能全文。
+func (p *PG) GetSkillByID(ctx context.Context, id uuid.UUID) (Skill, error) {
+	r, err := p.q.GetSkillByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Skill{}, ErrNotFound
+	}
+	if err != nil {
+		return Skill{}, err
+	}
+	return Skill{ID: r.ID, UserID: r.UserID, Name: r.Name, Description: r.Description,
+		Content: r.Content, CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time}, nil
+}

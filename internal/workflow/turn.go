@@ -5,6 +5,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
@@ -109,7 +110,15 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 			}).Get(ctx, &lastSeq)
 			break
 		}
-		if sandboxID == "" { // 懒唤醒：只在首个 tool_call 前
+		// M5：只有 VM 工具（shell）才懒唤醒；memory_* 走服务端路径，纯记忆对话不碰 VM
+		needsVM := false
+		for _, tc := range res.ToolCalls {
+			if !strings.HasPrefix(tc.Name, "memory_") {
+				needsVM = true
+				break
+			}
+		}
+		if needsVM && sandboxID == "" { // 懒唤醒：只在首个 VM tool_call 前
 			if err := workflow.ExecuteActivity(ctx, "EnsureAwake", in.SessionID).Get(ctx, &sandboxID); err != nil {
 				return fmt.Errorf("ensure awake: %w", err)
 			}
@@ -124,12 +133,21 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 			}
 
 			var out string
-			if err := workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
-				SandboxID: sandboxID, Name: tc.Name, Input: tc.Input,
-			}).Get(ctx, &out); err != nil {
+			var toolErr error
+			if strings.HasPrefix(tc.Name, "memory_") {
+				// 服务端工具：不经 VM（spec Q6）
+				toolErr = workflow.ExecuteActivity(ctx, "ExecMemoryTool", ExecMemoryToolInput{
+					SessionID: in.SessionID, Name: tc.Name, Input: tc.Input,
+				}).Get(ctx, &out)
+			} else {
+				toolErr = workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
+					SandboxID: sandboxID, Name: tc.Name, Input: tc.Input,
+				}).Get(ctx, &out)
+			}
+			if toolErr != nil {
 				// 工具执行失败也落库（exit_code=-1），让模型看到错误继续决策。
 				// 必须 json.Marshal——stderr 含引号/换行时 Sprintf 会拼出非法 JSON。
-				b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": err.Error()})
+				b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": toolErr.Error()})
 				out = string(b)
 			}
 			if err := writeAndSignal(WriteMessageInput{
