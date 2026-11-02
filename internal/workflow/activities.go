@@ -226,3 +226,23 @@ func (a *Activities) PublishChanged(ctx context.Context, sessionID string) error
 func (a *Activities) ReleaseTurn(ctx context.Context, sessionID, workflowID string) error {
 	return a.Redis.ReleaseTurn(ctx, sessionID, workflowID)
 }
+
+// StartMemoryPass turn 结束后异步触发记忆提取（M4 同款 client 模式，不用 child workflow）。
+// ID 用 turn 级唯一（memory-pass:<turnID>），天然去重。失败由调用方容忍——pass 不挡主链路（spec Q4）。
+func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID string, batchSeqs []int64) error {
+	sid, err := uuid.Parse(sessionID)
+	if err != nil {
+		return err
+	}
+	sess, err := a.PG.GetSession(ctx, sid)
+	if err != nil {
+		return err
+	}
+	_, err = a.TC.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        "memory-pass:" + turnID,
+		TaskQueue: TaskQueue,
+	}, MemoryPassWorkflow, MemoryPassInput{
+		UserID: sess.UserID, SessionID: sessionID, TurnID: turnID, BatchSeqs: batchSeqs,
+	})
+	return err
+}

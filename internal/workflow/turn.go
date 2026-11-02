@@ -145,6 +145,10 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 	if err := workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil); err != nil {
 		return fmt.Errorf("publish changed: %w", err)
 	}
+	// M5：回复落库后异步触发记忆提取。失败只记日志——pass 不挡主链路（spec Q4）。
+	if err := workflow.ExecuteActivity(ctx, "StartMemoryPass", in.SessionID, turnID, batch).Get(ctx, nil); err != nil {
+		logger.Warn("start memory pass failed", "err", err)
+	}
 	logger.Info("turn done", "batch", len(batch), "replySeq", lastSeq)
 	return nil
 }
