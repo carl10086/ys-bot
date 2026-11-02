@@ -42,16 +42,25 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 	logger := workflow.GetLogger(ctx)
 
 	turnID := workflow.GetInfo(ctx).WorkflowExecution.ID
-	defer func() {
-		dctx, _ := workflow.NewDisconnectedContext(ctx)
-		// 条件释放：锁可能已被打断者抢走，只放自己的
-		_ = workflow.ExecuteActivity(dctx, "ReleaseTurn", in.SessionID, turnID).Get(dctx, nil)
-	}()
 
 	var batch []int64
 	if err := workflow.ExecuteActivity(ctx, "DrainQueue", in.SessionID).Get(ctx, &batch); err != nil {
 		return fmt.Errorf("drain queue: %w", err)
 	}
+
+	defer func() {
+		dctx, _ := workflow.NewDisconnectedContext(ctx)
+		// 条件释放：锁可能已被打断者抢走，只放自己的
+		_ = workflow.ExecuteActivity(dctx, "ReleaseTurn", in.SessionID, turnID).Get(dctx, nil)
+		// M5/C1：被打断的 turn 也要提取——用户没等答完就发下一条时，
+		// 前一轮的偏好陈述同样值得记住。空批（无新消息）无内容可提取，跳过。
+		if len(batch) > 0 {
+			if err := workflow.ExecuteActivity(dctx, "StartMemoryPass", in.SessionID, turnID, batch).Get(dctx, nil); err != nil {
+				logger.Warn("start memory pass failed", "err", err)
+			}
+		}
+	}()
+
 	if len(batch) == 0 {
 		logger.Info("empty batch, nothing to do")
 		return nil
@@ -63,9 +72,10 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 	}
 
 	// M5 注入：装配记忆的系统提示作为 history[0]（不落库；空串 = 无 base 无记忆，不插）
+	// 注入失败降级为空串继续（review I3）：PG 抖动不该搞挂整个对话——记忆是增强不是依赖
 	var sysprompt string
 	if err := workflow.ExecuteActivity(ctx, "BuildSystemPrompt", in.SessionID).Get(ctx, &sysprompt); err != nil {
-		return fmt.Errorf("build system prompt: %w", err)
+		logger.Warn("build system prompt failed, 降级为无记忆注入", "err", err)
 	}
 	if sysprompt != "" {
 		history = append([]agent.Message{{Role: "system", Content: sysprompt}}, history...)
@@ -161,10 +171,6 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 
 	if err := workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil); err != nil {
 		return fmt.Errorf("publish changed: %w", err)
-	}
-	// M5：回复落库后异步触发记忆提取。失败只记日志——pass 不挡主链路（spec Q4）。
-	if err := workflow.ExecuteActivity(ctx, "StartMemoryPass", in.SessionID, turnID, batch).Get(ctx, nil); err != nil {
-		logger.Warn("start memory pass failed", "err", err)
 	}
 	logger.Info("turn done", "batch", len(batch), "replySeq", lastSeq)
 	return nil

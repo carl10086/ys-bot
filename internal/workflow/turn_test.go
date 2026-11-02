@@ -329,3 +329,49 @@ func TestTurnWorkflow_MemoryPassFailureTolerated(t *testing.T) {
 		t.Fatalf("pass 触发失败不应影响 turn: %v", err)
 	}
 }
+
+// I3：BuildSystemPrompt 失败（PG 抖动）→ 降级无注入继续跑，不挂掉整个 turn。
+func TestTurnWorkflow_PromptFailureDegrades(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&Activities{})
+
+	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
+	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", errors.New("pg down"))
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "降级也聊"}, nil)
+	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
+	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
+	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("注入失败不应搞挂 turn: %v", err)
+	}
+}
+
+// C1：turn 中途失败/被打断 → defer 里也要触发 memory pass（否则偏好陈述会丢）。
+func TestTurnWorkflow_CancelledTurnStillStartsMemoryPass(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&Activities{})
+
+	passStarted := false
+	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{5}, nil)
+	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "记住偏好"}}, nil)
+	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return("", errors.New("模拟被打断"))
+	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { passStarted = true }).Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
+	// workflow 因 CallLLM 失败而结束（有 error），但 pass 必须在 defer 里被触发
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow 应因 CallLLM 失败而报错")
+	}
+	if !passStarted {
+		t.Fatal("被打断的 turn 也必须触发 memory pass（C1）")
+	}
+}
