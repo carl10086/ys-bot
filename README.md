@@ -1,107 +1,95 @@
 # ys-bot
 
-基于 **Grok Bot 架构**实现的 always-on agent 沙箱系统：agent loop 在 server 侧，
-每个沙箱是一个 Firecracker microVM（agent 的"电脑"），不活跃时快照休眠、调用时原地恢复。
+基于 Grok Bot 架构的 always-on agent 系统。agent loop 运行在 server 侧，工具执行在独立的
+Firecracker microVM 中；沙箱空闲时快照休眠，工具需要时从快照恢复。
 
-灵感与架构依据来自 Grok Bot 负责人 Lee Robinson 在 Stanford CS146S 的分享：
-**[How always-on agents work](https://www.youtube.com/watch?v=L1OBRtfPS34)**。
-本项目按讲座中的四层模型亲手实现，架构逐条对照见
-[`docs/architecture/server-vm-boundary.md`](docs/architecture/server-vm-boundary.md)。
+架构参考 Grok Bot 负责人 Lee Robinson 在 Stanford CS146S 的讲座
+[How always-on agents work](https://www.youtube.com/watch?v=L1OBRtfPS34)，
+逐条对照见 [docs/architecture/server-vm-boundary.md](docs/architecture/server-vm-boundary.md)。
 
-## 核心架构
+## Features
+
+**Durable execution**
+
+每个 turn 是一个 Temporal workflow，模型调用与工具执行逐步持久化。worker 进程被 kill 后，
+新 worker 接管并从断点继续执行；server 重启不丢失会话历史。
+工具参数错误以模型可见的输出返回（模型可自行纠错），不作为 activity error 无限重试；
+memory pass 等异步工作的 LLM 调用重试封顶 3 次，失败不影响 turn 回复。
+
+**记忆**
+
+四层结构，存储于 PostgreSQL，跨会话生效：
+
+| 层 | 内容 | 使用方式 |
+|---|---|---|
+| Profile | 用户核心事实 | 每个 prompt 全量注入，上限 100 条 / 4000 字符 |
+| Log | 带日期的既往事件 | 最近 30 条注入 prompt |
+| Notes | 短期工作细节 | 带 TTL，过期后不再注入 |
+| Everything else | 其余全部记忆 | agent 通过 `memory_search` 工具按需检索 |
+
+每个 turn 结束后异步运行 memory pass：提取新事实、替换旧事实（只能删除本轮见过的条目），
+所有变更写入 `memory_ops` 审计表。写入按用户持 advisory lock 串行；agent 也可调用
+`memory_save` 主动写入。注入的记忆按信息处理，不作为指令执行。
+
+**沙箱生命周期**
+
+- 空闲数分钟后自动快照（内存 + 磁盘）并停机；turn 进行中不休眠。
+- 仅当工具调用需要 VM 时从快照恢复（同 slot、同 IP，VM 内文件保留）；纯对话不启动 VM。
+- 快照损坏或丢失时自动降级为全新启动，turn 照常完成。
+- 宿主重启后 vmhostd reconcile：无本地进程的沙箱标记 stopped 并释放资源，休眠快照保留。
+
+**寻址与探活**
+
+sandbox → 宿主映射存于 Redis catalog，调用方不记录宿主地址，先查 catalog 再连接。
+vmhostd 心跳 key TTL 30 秒，过期后映射自动失效；另提供 `/health` 进程级检查。
+catalog 为可丢协调态，丢失后由 vmhostd 重新注册重建。
+
+**消息协议**
+
+发送路径：幂等落库 → 入队 → 打断当前 turn → 启动新 turn。
+`msg_id` 由客户端生成，`ON CONFLICT DO NOTHING` 去重；turn 进行中收到新消息时协作式取消并合并输入；
+一个 turn 处理 drain 队列得到的一批消息。
+
+**安全边界**
+
+模型凭证仅存在于 server 侧，VM 内无 agent loop 与凭证。VM 位于宿主私有 tap 网段，
+不分配公网地址；外部访问经 vmhostd 反向代理，宿主仅暴露一个受控入口。
+
+## Architecture
 
 ```
 React SPA ──HTTP/SSE──▶ ys-server（API + 内嵌 SPA）
                             │  起 turn / 打断 / 幂等
                             ▼
-                       Temporal（持久执行，每步 durable）
+                       Temporal（每个 turn 一个 durable workflow）
                             │
                             ▼
                        ys-worker（agent loop + 沙箱编排）
-                            │  Connect-RPC（typed 流式）
+                            │  查 Redis catalog → Connect-RPC 经 vmhostd 入 VM
                             ▼
                 Firecracker microVM ── agentd（薄工具进程：shell / 文件）
 
-        PostgreSQL = 业务事实源（会话 / 消息 / 记忆 / 沙箱）
-        Redis      = 仅协调态（队列、锁、变更信号），可丢
+        PostgreSQL = 事实源（会话 / 消息 / 记忆 / 沙箱）    Redis = 协调态（队列 / 锁 / catalog）
 ```
 
-### 四层模型（讲座原图的实现）
+对应讲座的四层模型：触发（消息入口）→ agent process（Temporal workflow，跑一个 turn 后结束）
+→ agent's computer（Firecracker microVM，空闲休眠）→ saved state（PG 与文件存储，仅在 server）。
 
-| 层 | 职责 | 本项目的实现 |
+职责划分：server 负责 agent loop、会话与记忆存储、prompt 组装、工具调度、凭证；
+VM 只负责 shell / 文件执行。VM 可重建，丢失不影响会话与记忆。
+
+## 技术选型
+
+| 项 | 选择 | 理由 |
 |---|---|---|
-| Triggers | 把 agent 叫醒 | 用户消息（HTTP 入口），事件驱动而非进程常驻 |
-| Agent process | 跑一个 turn，然后停 | Temporal workflow：加载状态 → 工作 → 每步落库 |
-| Agent's computer | 工具执行环境，空闲即睡 | Firecracker microVM，一用户一台；快照到磁盘，工具需要时才恢复 |
-| Saved state | 永远在 server | PG（会话/消息/记忆）+ 文件存储（快照） |
+| 沙箱 | Firecracker microVM | 硬件级隔离，支持快照/恢复 |
+| 持久执行 | Temporal | workflow 级持久化，取消/定时/重试内建 |
+| server ↔ VM | Connect-RPC（proto + buf） | typed 流式 API；unary 兼容 HTTP/1.1，可用 curl 调试 |
+| agent 框架 | charm.land/fantasy，隔离在适配层后 | 避免框架的 session/workflow 与 Temporal 职责重叠 |
+| 进程 | ys-server / ys-worker 分离，单 module | worker 重启不影响 API，API 发版不打断 workflow |
+| 调试界面 | Vite + React，go:embed 进 ys-server | 单二进制分发 |
 
-"Always-on" 不是进程一直跑，而是**任何东西都能把它叫醒，且叫醒后上下文完好**。
-
-### 职责边界：什么活在 server，什么活在 VM
-
-- **Server = 智能与状态（丢了 = 事故）**：agent loop、会话与消息、memory/skills 的权威存储、
-  会话队列（每会话同时只有一个 turn）、prompt 组装、工具定义与调度、模型凭证。
-- **VM = agent 的电脑（丢了 = 环境重置，不是失忆）**：shell/文件执行、跨会话保留的工作文件与已装工具。
-  VM 内没有 agent loop，也没有模型凭证——它是可重建的一次性环境。
-
-## 关键机制
-
-### hit-send 协议：幂等、打断、合并
-
-一次发送的完整路径：**解析 → 幂等落库 → 入队 → 打断旧 turn → 起新 turn**，顺序不可换。
-
-- **幂等**：`msg_id` 由客户端生成，`INSERT ... ON CONFLICT(msg_id) DO NOTHING` 兜底，
-  网络重试/重复提交不产生重复消息，不需要额外的幂等窗组件。
-- **打断**：turn 进行中发新消息 → Temporal 协作式取消当前 turn → 合并队列 → 启动新 turn，
-  回复始终响应最新指令（对应讲座的用户特权通道："Actually, make it Thursday"）。
-- **合并**：turn 的输入是 drain 队列得到的**一批消息**，连续快速消息合进一个 turn，不是每条各跑一个。
-
-### Durable execution：崩溃从断点恢复
-
-每个 turn 是一个 Temporal workflow，每一步（模型调用、工具执行）都是落库的活动记录。
-`kill -9` worker 后重启，进行中的 turn 由新 worker 接管、从断点继续跑完；
-server 重启也不丢任何会话历史——事实源在 PG，进程只是无状态的执行者。
-
-### 快照休眠 / 懒唤醒
-
-沙箱空闲后：内存 + 磁盘快照到文件存储 → 停机。**只在 turn 中首个 tool_call 真正需要 VM 时**
-才按 `snapshot_ref` 原地恢复；纯对话的 turn 全程不醒。休眠绝不发生在 turn 中途（never mid-turn）。
-宿主重启后由 vmhostd 启动对账：本地无进程的沙箱标记 stopped、回收资源，PG 档案卡与真实状态保持一致。
-
-### 长期记忆
-
-每个 turn 结束后跑独立的 memory pass workflow：加载本轮消息 → 提取值得保留的事实 → 写入记忆库。
-写入阶段用 per-user advisory lock 串行，防止并发 turn 互相覆盖；后续 turn 按需注入相关记忆，
-注入失败降级为空而不是卡死对话。被打断的 turn 也参与提取——用户说过的偏好不因打断而丢失。
-
-## 存储设计
-
-| 存储 | 角色 | 放什么 | 丢了会怎样 |
-|---|---|---|---|
-| 业务 PG | 事实源 | sessions / messages / sandboxes / 记忆 | 事故 |
-| 文件存储 | 事实源 | 快照、知识文件 | 事故 |
-| Redis | 协调态 | 会话队列 / turn 锁 / 变更信号 | 可从 PG 重建，无害 |
-| Temporal PG | 执行账本 | workflow 事件历史 | 应用不查，Temporal 自管 |
-
-业务表统一约定，直接回应"高并发下编号/多租户"的经典坑：
-
-- **uuidv7 单列代理主键**，应用生成，不用复合自然键。
-- **每组编号用父行计数器**：`sessions.last_seq` 经 `UPDATE … RETURNING` 同事务发放会话内序号——
-  行锁天然串行化同组插入，回滚不留空号（PG sequence 给不了每组编号且回滚留洞，`MAX+1` 并发报废）。
-- **`user_id` 全表冗余、无 FK**：按用户直查免 JOIN；子表 user_id 从父行派生（SQL 内 SELECT），不靠应用传参。
-- **PG 记"应该存在什么"（档案卡），Redis 记"此刻谁活着"（值班表）**——低频事实与高频易逝状态分家。
-
-## 关键技术选型
-
-| 决策 | 结论 | 理由 |
-|---|---|---|
-| 仓库形态 | 单 module monorepo（Go） | 没有组件需要独立发版；temporal、coder 同体量项目均如此 |
-| 进程拓扑 | `ys-server` / `ys-worker` 分离 | worker 重启不掉 API，API 发版不打断 workflow |
-| server ↔ VM 协议 | **Connect-RPC**（proto + buf codegen） | e2b envd 同款：process/filesystem 全是有类型的流；unary 调用兼容 HTTP/1.1，curl 可调试 |
-| agent 框架 | `charm.land/fantasy` 薄层，关在适配接口后 | 重框架的 session/workflow 与 Temporal 职责冲突；薄层可整体替换 |
-| 调试界面 | Vite + React SPA，`go:embed` 进 ys-server | 单二进制分发，无需单独部署前端 |
-
-## 跑起来
+## Quickstart
 
 ```bash
 cd deploy && docker compose up -d          # Temporal + PG + Redis
@@ -113,27 +101,28 @@ LLM_API_KEY=xxx go run ./cmd/ys-worker     # OpenAI 兼容端点；LLM_BASE_URL/
 ## 目录结构
 
 ```
-cmd/ys-server/      HTTP API + 内嵌 SPA（对外入口）
+cmd/ys-server/      HTTP API + 内嵌 SPA
 cmd/ys-worker/      Temporal worker + agent loop + 沙箱编排
-cmd/agentd/         VM 内薄工具进程（shell / 文件）
-cmd/vmhostd/        宿主机代理：VM 生命周期 + 启动对账
+cmd/agentd/         VM 内工具进程（shell / 文件）
+cmd/vmhostd/        宿主机代理：VM 生命周期、反向代理、reconcile
 internal/workflow/  Temporal workflows + activities（turn、memory pass、休眠清扫）
-internal/agent/     agent loop（fantasy 适配层，业务代码不直接碰 fantasy 类型）
-internal/store/     PG（事实源）+ Redis（协调态）
+internal/agent/     agent loop（fantasy 适配层）
+internal/store/     PG + Redis
 internal/vmdriver/  VM 驱动接口 + Firecracker 实现
 proto/              Connect-RPC 协议定义（buf generate → internal/gen/）
 web/                Vite + React 调试界面
 ```
 
-## 文档
+## Documentation
 
-- **架构基石**：[`docs/architecture/server-vm-boundary.md`](docs/architecture/server-vm-boundary.md)——server/VM 职责边界、唤醒流水线、排队规则，含例子走查
-- **数据模型**：[`docs/architecture/data-model.md`](docs/architecture/data-model.md)——四类存储角色、统一建表约定
-- **设计 spec 与意图**：[`docs/ys-powers/`](docs/ys-powers/)
+- [server / VM 职责边界](docs/architecture/server-vm-boundary.md)：四层模型、唤醒流水线、排队规则
+- [数据模型](docs/architecture/data-model.md)：存储角色划分、建表约定
+- [设计 spec](docs/ys-powers/) 与 [决策记录](docs/adr/)
 
-## 参考实现（源码精读）
+## References
 
-- 沙箱调度 / 快照 / envd 通信 → [e2b-dev/runtime](https://github.com/e2b-dev/runtime)
-- Temporal agent loop 写法 → [temporal-community/temporal-ai-agent](https://github.com/temporal-community/temporal-ai-agent)
-- 产品形态 / 沙箱工具 API → [kortix-ai/suna](https://github.com/kortix-ai/suna)
-- Go 薄 agent 层 → [charmbracelet/fantasy](https://github.com/charmbracelet/fantasy)
+- [How always-on agents work — Lee Robinson, Stanford CS146S](https://www.youtube.com/watch?v=L1OBRtfPS34)
+- 沙箱调度 / 快照 / catalog：[e2b-dev/runtime](https://github.com/e2b-dev/runtime)
+- Temporal agent loop：[temporal-community/temporal-ai-agent](https://github.com/temporal-community/temporal-ai-agent)
+- 产品形态 / 沙箱工具 API：[kortix-ai/suna](https://github.com/kortix-ai/suna)
+- Go agent 薄层：[charmbracelet/fantasy](https://github.com/charmbracelet/fantasy)
