@@ -4,5 +4,8 @@ node_modules/
 web/dist/*
 !web/dist/index.html
 /.run
+/.idea/
+/.zed/
 /ys-worker
+docs/debug/
 .DS_Store
