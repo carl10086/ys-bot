@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // LoadHistory 集成测试的 PG：独立库 ys_sandbox_test_wf（go test 包间并行，

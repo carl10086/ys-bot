@@ -12,7 +12,7 @@ import (
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-	v1 "ys-sandbox/internal/gen/agentd/v1"
+	v1 "ys-bot/internal/gen/agentd/v1"
 )
 
 const (
@@ -396,7 +396,7 @@ const file_vmhostd_v1_vmhostd_proto_rawDesc = "" +
 	"\tDestroyVM\x12\x1c.vmhostd.v1.DestroyVMRequest\x1a\x1d.vmhostd.v1.DestroyVMResponse\x12E\n" +
 	"\bStatusVM\x12\x1b.vmhostd.v1.StatusVMRequest\x1a\x1c.vmhostd.v1.StatusVMResponse\x12B\n" +
 	"\aSleepVM\x12\x1a.vmhostd.v1.SleepVMRequest\x1a\x1b.vmhostd.v1.SleepVMResponse\x127\n" +
-	"\x04Exec\x12\x16.agentd.v1.ExecRequest\x1a\x17.agentd.v1.ExecResponseB.Z,ys-sandbox/internal/gen/vmhostd/v1;vmhostdv1b\x06proto3"
+	"\x04Exec\x12\x16.agentd.v1.ExecRequest\x1a\x17.agentd.v1.ExecResponseB*Z(ys-bot/internal/gen/vmhostd/v1;vmhostdv1b\x06proto3"
 
 var (
 	file_vmhostd_v1_vmhostd_proto_rawDescOnce sync.Once

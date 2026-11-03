@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/testsuite"
 
-	"ys-sandbox/internal/agent"
+	"ys-bot/internal/agent"
 )
 
 // TurnWorkflow 的期望形状（spec §5 / data-model.md）：

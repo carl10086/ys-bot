@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"ys-sandbox/internal/store/pg/gen"
+	"ys-bot/internal/store/pg/gen"
 )
 
 //go:embed schema.sql

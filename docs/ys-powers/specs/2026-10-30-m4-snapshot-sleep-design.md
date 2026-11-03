@@ -22,7 +22,7 @@
 ## Objective（目标与验收）
 
 **目标**：空闲 VM 自动快照休眠、停机省钱；下次 tool call 从快照原地恢复，环境还在。
-这是 ys-sandbox 选"always-on agent + Firecracker"架构的根本原因（intent 文档原文），
+这是 ys-bot 选"always-on agent + Firecracker"架构的根本原因（intent 文档原文），
 对应 Grok Bot 讲座 s12：*"Going to sleep (a few minutes after the last activity, never mid-turn)"*。
 
 **验收标准**（每条都要可观测地跑通）：

@@ -220,7 +220,7 @@ export default function App() {
             borderBottom: '1px solid #e2e8f0',
           }}
         >
-          <span>ys-sandbox 调试界面</span>
+          <span>ys-bot 调试界面</span>
           <span>
             {status} · {label}
           </span>

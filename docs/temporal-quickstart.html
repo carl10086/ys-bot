@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Temporal Quick Start —— ys-sandbox 视角</title>
+<title>Temporal Quick Start —— ys-bot 视角</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -246,7 +246,7 @@
 <body>
 
 <nav class="rail">
-  <div class="doc-title">Temporal Quick Start<br>ys-sandbox 视角</div>
+  <div class="doc-title">Temporal Quick Start<br>ys-bot 视角</div>
   <a href="#s1">§1 是什么（mental model）</a>
   <a href="#s1-roles" class="l2">三个角色</a>
   <a href="#s1-concepts" class="l2">核心概念</a>
@@ -261,8 +261,8 @@
 
 <main>
 
-<h1>Temporal Quick Start —— ys-sandbox 视角</h1>
-<div class="meta">读者预设：资深后端工程师，第一次接触 durable execution · 目标：理解 Temporal 在 ys-sandbox 里的角色、调用方式、崩溃恢复机制</div>
+<h1>Temporal Quick Start —— ys-bot 视角</h1>
+<div class="meta">读者预设：资深后端工程师，第一次接触 durable execution · 目标：理解 Temporal 在 ys-bot 里的角色、调用方式、崩溃恢复机制</div>
 
 <p class="lede">一句话：<strong>Temporal 让你的函数调用有记性</strong>——每一步（activity）完成后，结果被写进它自己的 PostgreSQL（event history）；进程死了，新进程读 PG 里的记录，从断点接着跑。</p>
 
@@ -275,7 +275,7 @@
 </ul>
 
 <h3 id="s1-roles">三个角色</h3>
-<p>ys-sandbox 的运行时由三个角色组成，其中两个是我们自己的 Go 二进制，一个是 Temporal：</p>
+<p>ys-bot 的运行时由三个角色组成，其中两个是我们自己的 Go 二进制，一个是 Temporal：</p>
 <table>
   <tr><th>角色</th><th>是什么</th><th>有状态吗</th><th>职责</th></tr>
   <tr>
@@ -386,7 +386,7 @@
 
 <p>ys-server 对 Temporal 的全部操作就四类：</p>
 <table>
-  <tr><th>操作</th><th>作用</th><th>ys-sandbox 里的用法</th></tr>
+  <tr><th>操作</th><th>作用</th><th>ys-bot 里的用法</th></tr>
   <tr><td><code>ExecuteWorkflow</code></td><td>启动一个 workflow</td><td>会话空闲时收到新消息 → 启动 TurnWorkflow</td></tr>
   <tr><td><code>SignalWorkflow</code></td><td>往跑着的 workflow 发消息</td><td>"用户又发来一条"、"批准了这个操作"</td></tr>
   <tr><td><code>QueryWorkflow</code></td><td>查 workflow 当前状态</td><td>调试用（业务状态在 Redis，正常不走这条）</td></tr>

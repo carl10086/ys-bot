@@ -17,11 +17,11 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
-	"ys-sandbox/internal/vmdriver"
-	"ys-sandbox/internal/workflow"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
+	"ys-bot/internal/vmdriver"
+	"ys-bot/internal/workflow"
 )
 
 func main() {

@@ -10,8 +10,8 @@ import (
 	errors "errors"
 	http "net/http"
 	strings "strings"
-	v11 "ys-sandbox/internal/gen/agentd/v1"
-	v1 "ys-sandbox/internal/gen/vmhostd/v1"
+	v11 "ys-bot/internal/gen/agentd/v1"
+	v1 "ys-bot/internal/gen/vmhostd/v1"
 )
 
 // This is a compile-time assertion to ensure that this generated file and the connect package are

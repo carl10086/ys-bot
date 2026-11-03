@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package vmhostd.v1;
 
-option go_package = "ys-sandbox/internal/gen/vmhostd/v1;vmhostdv1";
+option go_package = "ys-bot/internal/gen/vmhostd/v1;vmhostdv1";
 
 import "agentd/v1/agentd.proto";
 

@@ -13,12 +13,12 @@ import (
 
 	"go.temporal.io/sdk/client"
 
-	"ys-sandbox/internal/api"
-	"ys-sandbox/internal/hitsend"
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
-	"ys-sandbox/internal/workflow"
-	"ys-sandbox/web"
+	"ys-bot/internal/api"
+	"ys-bot/internal/hitsend"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
+	"ys-bot/internal/workflow"
+	"ys-bot/web"
 )
 
 func main() {

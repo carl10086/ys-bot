@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
 )
 
 // M4 续期测试（spec: 2026-10-30-m4-snapshot-sleep-design.md Q1）。

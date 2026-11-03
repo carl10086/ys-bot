@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"ys-sandbox/internal/agent"
+	"ys-bot/internal/agent"
 )
 
 // fakeAgent / fakeDriver：只存在于测试的替身，不进非测试代码。

@@ -1,4 +1,4 @@
-# ys-sandbox 开发命令。红线：只收"稳定 + 重复"的操作。
+# ys-bot 开发命令。红线：只收"稳定 + 重复"的操作。
 
 # 清掉所有数据（业务 PG + Redis + Temporal 历史）并重建空环境。
 # 测试重来用。注意：ys-server / ys-worker 需重启（ApplySchema 重建表、worker 重连）。

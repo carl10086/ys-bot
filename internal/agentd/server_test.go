@@ -8,9 +8,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"ys-sandbox/internal/agentd"
-	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
-	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
+	"ys-bot/internal/agentd"
+	agentdv1 "ys-bot/internal/gen/agentd/v1"
+	"ys-bot/internal/gen/agentd/v1/agentdv1connect"
 )
 
 // 经真 RPC（httptest + connect client）验证 Exec/Health 行为。

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/store/pg"
 )
 
 // M5 注入（spec Q5）：system prompt 的组装与截断。

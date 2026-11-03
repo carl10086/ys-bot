@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
 )
 
 // Starter 把"启动/取消 turn"的 Temporal 依赖收窄成两个动作（workflow.TemporalStarter 实现；测试可假）。

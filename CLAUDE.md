@@ -5,7 +5,7 @@
 ## 项目定位
 
 个人项目：按 Grok Bot 架构实现的 always-on agent 沙箱系统。
-先读 `docs/ys-powers/intent/ys-sandbox.md`（已确认的意图）和 `README.md`（架构决策）。
+先读 `docs/ys-powers/intent/ys-bot.md`（已确认的意图）和 `README.md`（架构决策）。
 
 ## 技术栈（已定，不要偏离）
 

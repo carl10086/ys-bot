@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/store/pg"
 )
 
 // profilePromptMax 注入的 profile 块字符上限（超出截断并留标记——记忆不只这些，可用 memory_search 翻）。

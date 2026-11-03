@@ -1,12 +1,12 @@
-# ys-sandbox — 意图文档
+# ys-bot — 意图文档
 
 > 产出：`/clarify-intent`（2026-10-27），经访谈确认，用户明确 yes。
-> 项目根：`/Users/yusizhen/soft/projects/ys-sandbox`（独立于 ys-learn 的新项目）
+> 项目根：`/Users/yusizhen/soft/projects/ys-bot`（独立于 ys-learn 的新项目）
 
 ## 确认的意图
 
 ```
-Outcome:      ys-sandbox——亲手实现 Grok Bot 架构的 always-on agent 沙箱系统，
+Outcome:      ys-bot——亲手实现 Grok Bot 架构的 always-on agent 沙箱系统，
               跑在自己的 Linux 服务器上，真实可用而非纯玩具
 User:         你自己（第一个且唯一的用户）
 Why now:      读完 e2b runtime / Suna 等源码后，要把架构认知变成自己跑起来的系统

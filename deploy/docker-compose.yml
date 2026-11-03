@@ -1,4 +1,4 @@
-# ys-sandbox 状态服务——部署在 VM 宿主（152.136.212.59）上，Mac 不再跑。
+# ys-bot 状态服务——部署在 VM 宿主（152.136.212.59）上，Mac 不再跑。
 # 拓扑（2026-10-30 迁移定案）：全部 bind 公网网卡 + 非标端口 + 密码；
 # 端口/密码来自同目录 .env（只存在于 152 的 /data/ys-infra/，不入库）：
 #   POSTGRES_PASSWORD / REDIS_PASSWORD

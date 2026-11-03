@@ -12,8 +12,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
-	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
+	agentdv1 "ys-bot/internal/gen/agentd/v1"
+	"ys-bot/internal/gen/agentd/v1/agentdv1connect"
 )
 
 // defaultExecTimeout ExecRequest.timeout_sec=0 时的默认值。

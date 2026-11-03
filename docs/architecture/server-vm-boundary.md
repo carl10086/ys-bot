@@ -1,6 +1,6 @@
 # Server / VM 职责边界（Grok Bot 架构的权威依据）
 
-> 本文档是 ys-sandbox 架构的第一块基石：**什么活在 server，什么活在 VM，以及 agent 怎么被唤醒**。
+> 本文档是 ys-bot 架构的第一块基石：**什么活在 server，什么活在 VM，以及 agent 怎么被唤醒**。
 > 依据：Lee Robinson（Grok Bot 负责人）Stanford CS146S 讲座 "How always-on agents work"（2026-10-08）
 > 的幻灯片原文，重点是 "How does it stay always on?"（四层模型，**s00/s10**）与 "What wakes the agent"（唤醒流水线，**s11**）。
 > 原始素材：`ys-learn/notes/agents/cs146s-slides/`、`cs146s-how-always-on-agents-work-transcript.txt`
@@ -135,11 +135,11 @@ Everyone else（群聊/Slack/routine/helper）
 3. **turn 的输入是"一批消息"**："The agent works on one batch of messages at a time"——
    连续快速消息合并进一个 turn，不是每条各跑一个
 
-对 ys-sandbox：TurnWorkflow 输入 = turn 开始时 drain 会话队列得到的**一批消息**；
+对 ys-bot：TurnWorkflow 输入 = turn 开始时 drain 会话队列得到的**一批消息**；
 "打断" = Temporal `CancelWorkflow`（协作式取消当前 turn）→ 合并队列 → 启动新 turn。
 v1 只有用户一个来源，但"打断"和"合并"从第一天就实现——它们是调试体验的核心手感。
 
-对 ys-sandbox：v1 只有一个触发源（web 调试消息），但 **Router + 会话队列 + Turn 的管道形状
+对 ys-bot：v1 只有一个触发源（web 调试消息），但 **Router + 会话队列 + Turn 的管道形状
 按此实现**——msg ID 幂等即 Router 去重，sessionID 即"选会话"；将来加 routine/webhook
 只是往左接新源，主干不动。
 
@@ -182,7 +182,7 @@ v1 只有用户一个来源，但"打断"和"合并"从第一天就实现——�
 关键点：**自我进化的产物（每个用户独有的 prompt 片段/skill/memory）必须比 VM 长寿**。
 这是它们权威存储在 server 的根本原因。
 
-## 对 ys-sandbox 的设计约束
+## 对 ys-bot 的设计约束
 
 1. **agent process 短命化**：loop 不是一个常驻服务循环，而是"触发 → 跑 turn → 停"。
    对应我们的 TurnWorkflow：每 turn 一个 workflow，跑完即终（与 per-turn 拓扑决策一致）。

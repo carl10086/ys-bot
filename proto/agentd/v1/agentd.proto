@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agentd.v1;
 
-option go_package = "ys-sandbox/internal/gen/agentd/v1;agentdv1";
+option go_package = "ys-bot/internal/gen/agentd/v1;agentdv1";
 
 // Agentd VM 内守护进程：真正执行命令的地方（e2b envd 的砍版）。
 // 协议背景见 docs/ys-powers/specs/2026-10-29-m2-design.md §2。

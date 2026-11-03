@@ -18,12 +18,12 @@ import (
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 
-	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
-	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
-	vmhostdv1 "ys-sandbox/internal/gen/vmhostd/v1"
-	"ys-sandbox/internal/gen/vmhostd/v1/vmhostdv1connect"
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
+	agentdv1 "ys-bot/internal/gen/agentd/v1"
+	"ys-bot/internal/gen/agentd/v1/agentdv1connect"
+	vmhostdv1 "ys-bot/internal/gen/vmhostd/v1"
+	"ys-bot/internal/gen/vmhostd/v1/vmhostdv1connect"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
 )
 
 // Config vmhostd 运行配置（env 注入）。

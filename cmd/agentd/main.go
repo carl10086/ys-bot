@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"ys-sandbox/internal/agentd"
+	"ys-bot/internal/agentd"
 )
 
 func main() {

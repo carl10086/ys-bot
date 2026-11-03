@@ -1,4 +1,4 @@
-module ys-sandbox
+module ys-bot
 
 go 1.27.3
 

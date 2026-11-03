@@ -12,11 +12,11 @@ import (
 	"connectrpc.com/connect"
 	"github.com/redis/go-redis/v9"
 
-	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
-	vmhostdv1 "ys-sandbox/internal/gen/vmhostd/v1"
-	"ys-sandbox/internal/gen/vmhostd/v1/vmhostdv1connect"
-	"ys-sandbox/internal/store/pg"
-	storeredis "ys-sandbox/internal/store/redis"
+	agentdv1 "ys-bot/internal/gen/agentd/v1"
+	vmhostdv1 "ys-bot/internal/gen/vmhostd/v1"
+	"ys-bot/internal/gen/vmhostd/v1/vmhostdv1connect"
+	"ys-bot/internal/store/pg"
+	storeredis "ys-bot/internal/store/redis"
 )
 
 // M4 Exec 自愈（spec Q2）：VM 非 awake（休眠竞态撞上）→ EnsureVM（resume）→ 重试一次。

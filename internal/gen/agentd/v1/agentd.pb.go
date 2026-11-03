@@ -231,7 +231,7 @@ const file_agentd_v1_agentd_proto_rawDesc = "" +
 	"\x06stderr\x18\x03 \x01(\tR\x06stderr2\x80\x01\n" +
 	"\x06Agentd\x12=\n" +
 	"\x06Health\x12\x18.agentd.v1.HealthRequest\x1a\x19.agentd.v1.HealthResponse\x127\n" +
-	"\x04Exec\x12\x16.agentd.v1.ExecRequest\x1a\x17.agentd.v1.ExecResponseB,Z*ys-sandbox/internal/gen/agentd/v1;agentdv1b\x06proto3"
+	"\x04Exec\x12\x16.agentd.v1.ExecRequest\x1a\x17.agentd.v1.ExecResponseB(Z&ys-bot/internal/gen/agentd/v1;agentdv1b\x06proto3"
 
 var (
 	file_agentd_v1_agentd_proto_rawDescOnce sync.Once

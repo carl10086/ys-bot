@@ -1,7 +1,7 @@
 # M1 主干 设计文档
 
 > 日期：2026-10-28 · 状态：设计已确认，待实现
-> 输入：`docs/ys-powers/intent/ys-sandbox.md`（已确认意图）+ 设计对话五节（2026-10-27 ~ 10-28）
+> 输入：`docs/ys-powers/intent/ys-bot.md`（已确认意图）+ 设计对话五节（2026-10-27 ~ 10-28）
 > 引用文档：`docs/architecture/server-vm-boundary.md`、`docs/architecture/data-model.md`（定稿）、`docs/architecture/phasing.md`、`CONTEXT.md`
 
 ## 1. Objective（目标）

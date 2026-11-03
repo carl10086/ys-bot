@@ -9,8 +9,8 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // TaskQueue ys-worker 监听的 Temporal task queue。

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/testsuite"
 
-	"ys-sandbox/internal/agent"
+	"ys-bot/internal/agent"
 )
 
 // M5 服务端工具（spec Q6）：memory_* 不经 VM/agentd，在 worker 内直接执行。

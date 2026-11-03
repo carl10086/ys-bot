@@ -15,8 +15,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // ExtractPrompt 提取模型的 system prompt（规则骨架 = spec "提取 prompt 规则"）。

@@ -13,10 +13,10 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
-	"ys-sandbox/internal/vmdriver"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
+	"ys-bot/internal/vmdriver"
 )
 
 // Activities TurnWorkflow 的全部副作用。每步落库 / 空信号 = 讲座 15 黑条的实现。

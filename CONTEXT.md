@@ -1,4 +1,4 @@
-# CONTEXT.md — ys-sandbox 领域语言
+# CONTEXT.md — ys-bot 领域语言
 
 > 设计对话（2026-10-27 ~ 10-28）沉淀的统一语言。代码、文档、讨论中用这些词时，含义以此为准。
 > 出处：CS146S 讲座全档 `docs/reference/cs146s-grokbot-lecture.html`（讲座序 01–37）+ 本项目架构文档。

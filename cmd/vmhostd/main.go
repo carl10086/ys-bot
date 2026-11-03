@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"ys-sandbox/internal/vmhostd"
+	"ys-bot/internal/vmhostd"
 )
 
 func envOr(k, def string) string {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/store/pg"
 )
 
 // M4 续期（spec Q1）：ExecTool 每次执行开头刷新 sandbox 的 last_activity_at——

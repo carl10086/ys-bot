@@ -1,8 +1,8 @@
 package workflow
 
 import (
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // projectHistory PG 消息 → agent 历史投影。

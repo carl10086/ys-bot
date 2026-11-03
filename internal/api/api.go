@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"ys-sandbox/internal/hitsend"
-	"ys-sandbox/internal/store/pg"
-	"ys-sandbox/internal/store/redis"
+	"ys-bot/internal/hitsend"
+	"ys-bot/internal/store/pg"
+	"ys-bot/internal/store/redis"
 )
 
 type Server struct {

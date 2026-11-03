@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.temporal.io/sdk/testsuite"
 
-	"ys-sandbox/internal/agent"
-	"ys-sandbox/internal/store/pg"
+	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // M5 提取管线测试（spec: 2026-11-02-m5-memory-design.md Q7）。

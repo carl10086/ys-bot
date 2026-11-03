@@ -19,9 +19,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
-	agentdv1 "ys-sandbox/internal/gen/agentd/v1"
-	"ys-sandbox/internal/gen/agentd/v1/agentdv1connect"
-	"ys-sandbox/internal/store/pg"
+	agentdv1 "ys-bot/internal/gen/agentd/v1"
+	"ys-bot/internal/gen/agentd/v1/agentdv1connect"
+	"ys-bot/internal/store/pg"
 )
 
 // agentdReadyTimeout 起 VM 后等 agentd health 的最长时间。
