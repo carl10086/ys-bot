@@ -131,11 +131,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (user_id, hash) DO NOTHING;
 
 -- name: UpdateMemory :execrows
-UPDATE memories SET text = $2, importance = $3, expires_at = $4, updated_at = now()
+-- 正文变化必须同步 hash，否则后续去重仍按旧正文。
+UPDATE memories SET text = $2, importance = $3, expires_at = $4, hash = $5, updated_at = now()
 WHERE id = $1;
 
 -- name: DeleteMemory :execrows
 DELETE FROM memories WHERE id = $1;
+
+-- name: GetMemoryByHash :one
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories WHERE user_id = $1 AND hash = $2;
 
 -- name: GetMemoryByID :one
 SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
@@ -207,12 +212,21 @@ SELECT id, name, description FROM skills WHERE user_id = $1 ORDER BY name;
 SELECT id, kind, text FROM (
   SELECT id, 'memory' AS kind, text, updated_at FROM memories
   WHERE memories.user_id = $1 AND text ILIKE '%' || $2 || '%'
+    AND (type != 'note' OR expires_at IS NULL OR expires_at > now())
   UNION ALL
   SELECT id, 'skill' AS kind, content AS text, updated_at FROM skills
   WHERE skills.user_id = $1 AND (content ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%')
 ) hits
 ORDER BY updated_at DESC
 LIMIT $3;
+
+-- name: CountMemoryOpsBySource :one
+-- pass 批次幂等：同一 source 已提交过时，activity 重试直接返回首次写入数。
+SELECT count(*) FROM memory_ops WHERE user_id = $1 AND source = $2;
+
+-- name: GetMemoryVersion :one
+-- 所有记忆/技能写入都会追加审计；max id 作为旧快照的轻量版本。
+SELECT COALESCE(MAX(id), 0)::bigint FROM memory_ops WHERE user_id = $1;
 
 -- name: InsertMemoryOp :exec
 INSERT INTO memory_ops (user_id, op, target_type, target_id, before_text, after_text, source)

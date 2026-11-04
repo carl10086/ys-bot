@@ -102,6 +102,9 @@ func TestExecMemoryTool_Validation(t *testing.T) {
 		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"profile"}`},         // 缺 text
 		{SessionID: sess.ID.String(), Name: "memory_search", Input: `{"query":""}`},             // 空 query
 		{SessionID: sess.ID.String(), Name: "memory_read", Input: `{"kind":"memory","id":"x"}`}, // 坏 uuid
+		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"note","text":"缺 TTL"}`},
+		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"note","text":"负 TTL","ttl_minutes":-1}`},
+		{SessionID: sess.ID.String(), Name: "memory_save", Input: `{"type":"profile","text":"错误 TTL","ttl_minutes":60}`},
 	} {
 		out, err := a.ExecMemoryTool(ctx, in)
 		if err != nil {

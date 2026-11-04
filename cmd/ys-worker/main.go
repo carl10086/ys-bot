@@ -82,6 +82,7 @@ func main() {
 	w.RegisterWorkflow(workflow.SleepSweepWorkflow)
 	w.RegisterWorkflow(workflow.SleepWorkflow)
 	w.RegisterWorkflow(workflow.MemoryPassWorkflow)
+	w.RegisterWorkflow(workflow.MemoryPassQueueWorkflow)
 	// VM 工具环境（M2）：VM_DRIVER=remote 时启用；缺省无 Driver = M1 纯对话行为。
 	var drv vmdriver.Driver
 	if os.Getenv("VM_DRIVER") == "remote" {

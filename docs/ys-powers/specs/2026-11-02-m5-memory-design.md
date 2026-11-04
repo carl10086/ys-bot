@@ -171,3 +171,15 @@ ops 应用必须事务 + 审计成对出现；workflow 起子任务走 activity 
 - profile 写满（>100 条）时：v1 注入侧截断 + 依赖 pass 的 update/delete 瘦身；是否学 Hermes"写满报错倒逼合并"留作运营后的真实 bad case 再定。
 - 连续 turn 时两个 pass 可能重叠写库：**已修（review I1）**——`ApplyMemoryOps` 事务开头加 per-user advisory lock（`pg_advisory_xact_lock(hashtext(userID))`），写入阶段串行；并发测试覆盖"update+delete 同一行"竞态。
 - `MEMORY_MODEL` 的具体选型（哪家的便宜档）在实现期按现有 LLM 配置定，不定死。
+
+## 2026-11-03 后续修订：分层 pass 与完整顺序
+
+本节取代 Q4/Q7 中“每 turn 独立 ExecuteWorkflow”和“写锁已解决并发”的实现描述；M5 验收记录保持原样。
+
+- **分层单-pass**：Profile 只描述当前事实，Log 记录历史事件，Notes 保存短期工作；三层直接依据本轮 messages，不经 Log 派生。update/delete 只能指向本 pass 展示过的同层条目，Note 必须有正数 TTL。
+- **每用户队列**：turn 尾部通过 SignalWithStart 投入 `memory-pass-queue:<user>`；完整 `读取→提取→写入` 串行。child ID 为 `memory-pass:<turnID>`，RejectDuplicate 防止 signal 重试重复执行。队列每 100 个 pass ContinueAsNew，pending 去重并封顶 100；溢出保留最新、丢弃最旧并 Warn。
+- **直写冲突**：pass 读取 memory_ops 版本；`memory_save` 直写导致版本变化时，旧 ops 不提交，重新读取并提取。Apply 已提交但响应丢失时，按 `source=pass:<turnID>` 幂等返回，不重复写入或重新提取。
+- **存储修正**：update 同步 hash；正文撞已有记忆时保留 update target、删除冲突行并分别审计。过期 Note 不进搜索。`memory_ops(user_id,id DESC)` 支撑版本查询。
+- **before-compaction / session-end**：不写三层记忆；前者只做会话摘要，后者不引入。后台整理仍不做。
+- **升级前提**：2026-11-03 审查时运行中的旧 MemoryPassWorkflow 为 0，因此不保留旧 history 的重放分支；部署前仍需再次排空。既有 PG 数据由维护者备份后显式执行 `internal/store/pg/repair_memory_hash.sql`，该脚本幂等并为删除/修正写审计，不在启动时自动改数据。
+- **验证依据**：开发 pilot 使用 10 个 M4/M5 documented_task_replay case、40 次 k3 调用；统一 prompt 16/20，分层 prompt 20/20。该结果为 silver gold，不是独立人工正式验收。
