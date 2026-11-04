@@ -98,6 +98,9 @@ func (p *PG) CreateSession(ctx context.Context, userID, title string) (Session, 
 // ErrNotFound 记录不存在（翻译 pgx.ErrNoRows，调用方不用 import pgx）。
 var ErrNotFound = errors.New("pg: not found")
 
+// ErrMemoryConflict 表示记忆在提取期间被其他写入改变，旧快照的 ops 不得提交。
+var ErrMemoryConflict = errors.New("pg: memory snapshot conflict")
+
 // SessionSummary 会话列表项：会话本身 + 最近活跃时间（列表排序键）。
 type SessionSummary struct {
 	Session
@@ -566,12 +569,24 @@ type MemoryOp struct {
 	Content     string // skill 全文
 }
 
+// GetMemoryVersion 返回当前用户的记忆写入版本，供 pass 快照校验。
+func (p *PG) GetMemoryVersion(ctx context.Context, userID string) (int64, error) {
+	return p.q.GetMemoryVersion(ctx, userID)
+}
+
 // ApplyMemoryOps 事务内逐条应用 ops，每条配一行 memory_ops 审计（成对出现，spec Boundary）。
-// 宽容 LLM 产出：update/delete 目标不存在 = 跳过（可能对着已删编号发指令，不炸整批）；
-// add 撞 hash（同文本已在库）= 去重跳过不审计。返回实际应用条数。
-// I1：事务开头按 userID 加 advisory lock——同一 user 的并发 pass 在写入阶段串行，
-// 先提交的赢，后提交的基于已更新的库裁决（消解"并发 delete+update 同一行"竞态）。
+// 宽容 LLM 产出：update/delete 目标不存在 = 跳过；add 撞 hash = 去重跳过不审计。
 func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, source string) (int, error) {
+	return p.applyMemoryOps(ctx, userID, ops, source, nil)
+}
+
+// ApplyMemoryOpsAtVersion 仅当记忆仍停留在 expectedVersion 时提交，供 memory pass 防止旧快照覆盖新写入。
+func (p *PG) ApplyMemoryOpsAtVersion(ctx context.Context, userID string, ops []MemoryOp, source string, expectedVersion int64) (int, error) {
+	return p.applyMemoryOps(ctx, userID, ops, source, &expectedVersion)
+}
+
+func (p *PG) applyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, source string, expectedVersion *int64) (int, error) {
+	// per-user 写锁串行化 pass 与 agent 工具；pass 的读取/提取顺序由队列保证。
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -582,6 +597,23 @@ func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, 
 		return 0, fmt.Errorf("memory pass lock: %w", err)
 	}
 	q := p.q.WithTx(tx)
+	if expectedVersion != nil {
+		// Apply 成功响应可能丢失；先识别本 pass 已提交，避免把自己的版本变化误判为外部冲突。
+		committed, err := q.CountMemoryOpsBySource(ctx, gen.CountMemoryOpsBySourceParams{UserID: userID, Source: source})
+		if err != nil {
+			return 0, err
+		}
+		if committed > 0 {
+			return int(committed), nil
+		}
+		current, err := q.GetMemoryVersion(ctx, userID)
+		if err != nil {
+			return 0, err
+		}
+		if current != *expectedVersion {
+			return 0, ErrMemoryConflict
+		}
+	}
 
 	audit := func(op MemoryOp, targetID *uuid.UUID, before, after string) error {
 		return q.InsertMemoryOp(ctx, gen.InsertMemoryOpParams{
@@ -634,8 +666,26 @@ func (p *PG) ApplyMemoryOps(ctx context.Context, userID string, ops []MemoryOp, 
 			if op.TTLMinutes != nil {
 				expires = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(*op.TTLMinutes) * time.Minute), Valid: true}
 			}
+			sum := md5.Sum([]byte(op.Text))
+			hash := hex.EncodeToString(sum[:])
+			existing, err := q.GetMemoryByHash(ctx, gen.GetMemoryByHashParams{UserID: userID, Hash: hash})
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return applied, err
+			}
+			if err == nil && existing.ID != op.TargetID {
+				// update 保留 target 身份：删除同正文的冲突行，再完整更新 target。
+				// 隐式删除也写审计，避免无声丢失另一条记忆。
+				if _, err := q.DeleteMemory(ctx, existing.ID); err != nil {
+					return applied, err
+				}
+				if err := audit(MemoryOp{Op: "delete", TargetType: "memory"}, &existing.ID, existing.Text, ""); err != nil {
+					return applied, err
+				}
+				applied++
+			}
 			n, err := q.UpdateMemory(ctx, gen.UpdateMemoryParams{
 				ID: op.TargetID, Text: op.Text, Importance: op.Importance, ExpiresAt: expires,
+				Hash: hash,
 			})
 			if err != nil {
 				return applied, err

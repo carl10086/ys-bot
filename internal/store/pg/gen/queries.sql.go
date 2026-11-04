@@ -47,6 +47,23 @@ func (q *Queries) AddMemory(ctx context.Context, arg AddMemoryParams) (int64, er
 	return result.RowsAffected(), nil
 }
 
+const countMemoryOpsBySource = `-- name: CountMemoryOpsBySource :one
+SELECT count(*) FROM memory_ops WHERE user_id = $1 AND source = $2
+`
+
+type CountMemoryOpsBySourceParams struct {
+	UserID string
+	Source string
+}
+
+// pass 批次幂等：同一 source 已提交过时，activity 重试直接返回首次写入数。
+func (q *Queries) CountMemoryOpsBySource(ctx context.Context, arg CountMemoryOpsBySourceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMemoryOpsBySource, arg.UserID, arg.Source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (id, user_id, host_id, status)
@@ -167,6 +184,33 @@ func (q *Queries) DeleteSkill(ctx context.Context, arg DeleteSkillParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const getMemoryByHash = `-- name: GetMemoryByHash :one
+SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
+FROM memories WHERE user_id = $1 AND hash = $2
+`
+
+type GetMemoryByHashParams struct {
+	UserID string
+	Hash   string
+}
+
+func (q *Queries) GetMemoryByHash(ctx context.Context, arg GetMemoryByHashParams) (Memory, error) {
+	row := q.db.QueryRow(ctx, getMemoryByHash, arg.UserID, arg.Hash)
+	var i Memory
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Type,
+		&i.Text,
+		&i.Importance,
+		&i.Hash,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getMemoryByID = `-- name: GetMemoryByID :one
 SELECT id, user_id, type, text, importance, hash, expires_at, created_at, updated_at
 FROM memories WHERE id = $1
@@ -187,6 +231,18 @@ func (q *Queries) GetMemoryByID(ctx context.Context, id uuid.UUID) (Memory, erro
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getMemoryVersion = `-- name: GetMemoryVersion :one
+SELECT COALESCE(MAX(id), 0)::bigint FROM memory_ops WHERE user_id = $1
+`
+
+// 所有记忆/技能写入都会追加审计；max id 作为旧快照的轻量版本。
+func (q *Queries) GetMemoryVersion(ctx context.Context, userID string) (int64, error) {
+	row := q.db.QueryRow(ctx, getMemoryVersion, userID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const getMessageSeqByMsgID = `-- name: GetMessageSeqByMsgID :one
@@ -966,6 +1022,7 @@ const searchMemories = `-- name: SearchMemories :many
 SELECT id, kind, text FROM (
   SELECT id, 'memory' AS kind, text, updated_at FROM memories
   WHERE memories.user_id = $1 AND text ILIKE '%' || $2 || '%'
+    AND (type != 'note' OR expires_at IS NULL OR expires_at > now())
   UNION ALL
   SELECT id, 'skill' AS kind, content AS text, updated_at FROM skills
   WHERE skills.user_id = $1 AND (content ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%')
@@ -1078,7 +1135,7 @@ func (q *Queries) TryStartSleep(ctx context.Context, arg TryStartSleepParams) (i
 }
 
 const updateMemory = `-- name: UpdateMemory :execrows
-UPDATE memories SET text = $2, importance = $3, expires_at = $4, updated_at = now()
+UPDATE memories SET text = $2, importance = $3, expires_at = $4, hash = $5, updated_at = now()
 WHERE id = $1
 `
 
@@ -1087,14 +1144,17 @@ type UpdateMemoryParams struct {
 	Text       string
 	Importance int32
 	ExpiresAt  pgtype.Timestamptz
+	Hash       string
 }
 
+// 正文变化必须同步 hash，否则后续去重仍按旧正文。
 func (q *Queries) UpdateMemory(ctx context.Context, arg UpdateMemoryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateMemory,
 		arg.ID,
 		arg.Text,
 		arg.Importance,
 		arg.ExpiresAt,
+		arg.Hash,
 	)
 	if err != nil {
 		return 0, err

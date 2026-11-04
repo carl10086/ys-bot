@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.temporal.io/api/enums/v1"
@@ -283,8 +284,8 @@ func (a *Activities) ReleaseTurn(ctx context.Context, sessionID, workflowID stri
 	return a.Redis.ReleaseTurn(ctx, sessionID, workflowID)
 }
 
-// StartMemoryPass turn 结束后异步触发记忆提取（M4 同款 client 模式，不用 child workflow）。
-// ID 用 turn 级唯一（memory-pass:<turnID>），天然去重。失败由调用方容忍——pass 不挡主链路（spec Q4）。
+// StartMemoryPass 把 turn 投入用户专属队列；完整 pass 串行，避免并发读取旧快照后相互覆盖。
+// 队列由 SignalWithStart 懒启动；调用方容错，记忆提取不挡主回复。
 func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID string, batchSeqs []int64) error {
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
@@ -294,15 +295,19 @@ func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID stri
 	if err != nil {
 		return err
 	}
-	_, err = a.TC.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        "memory-pass:" + turnID,
-		TaskQueue: TaskQueue,
-	}, MemoryPassWorkflow, MemoryPassInput{
-		UserID: sess.UserID, SessionID: sessionID, TurnID: turnID, BatchSeqs: batchSeqs,
-	})
+	_, err = a.TC.SignalWithStartWorkflow(ctx,
+		"memory-pass-queue:"+sess.UserID, MemoryPassEnqueueSignal,
+		MemoryPassInput{
+			UserID: sess.UserID, SessionID: sessionID, TurnID: turnID,
+			BatchSeqs: batchSeqs, ReferenceTime: time.Now().UTC(),
+		}, client.StartWorkflowOptions{
+			ID:                       "memory-pass-queue:" + sess.UserID,
+			TaskQueue:                TaskQueue,
+			WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+			WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		}, MemoryPassQueueWorkflow, MemoryPassQueueInput{UserID: sess.UserID})
 	return err
 }
-
 
 // toolFail 工具参数/用法错误：返回模型可见的错误 JSON（exit_code=-1），**不是** activity error——
 // activity error 会被 Temporal 无限重试，校验错误重试无意义且会卡死 turn（M5 e2e 实测）。
@@ -419,6 +424,12 @@ func (a *Activities) ExecMemoryTool(ctx context.Context, in ExecMemoryToolInput)
 		}
 		if args.Importance == 0 {
 			args.Importance = 5
+		}
+		if args.Type != "note" && args.TTLMinutes != nil {
+			return toolFail("memory_save 仅 note 可设置 ttl_minutes: %s", in.Input)
+		}
+		if args.Type == "note" && (args.TTLMinutes == nil || *args.TTLMinutes <= 0) {
+			return toolFail("memory_save note 需要正数 ttl_minutes: %s", in.Input)
 		}
 		op := pg.MemoryOp{Op: "add", Importance: args.Importance, TTLMinutes: args.TTLMinutes}
 		if args.Type == "skill" {

@@ -83,3 +83,6 @@ CREATE TABLE IF NOT EXISTS memory_ops (
   source      text NOT NULL,                 -- pass:<turn_id> / agent
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- memory pass 快照版本按用户读 max(id)，避免随审计量增长退化成全表扫描。
+CREATE INDEX IF NOT EXISTS memory_ops_user_id_id ON memory_ops (user_id, id DESC);

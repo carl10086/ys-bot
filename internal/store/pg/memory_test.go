@@ -2,7 +2,11 @@ package pg
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 
@@ -123,6 +127,156 @@ func TestPG_MemoryOps_UpdateDeleteWithAudit(t *testing.T) {
 	})
 	if n != 0 {
 		t.Fatalf("missing-target applied = %d, want 0", n)
+	}
+}
+
+func TestPG_MemoryUpdateRefreshesHash(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	mustApplyOps(t, db, "u-hash", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "旧事实", Importance: 5},
+	})
+	mems, _ := db.ListProfileMemories(ctx, "u-hash")
+	mustApplyOps(t, db, "u-hash", []MemoryOp{
+		{Op: "update", TargetType: "memory", TargetID: mems[0].ID, Text: "新事实", Importance: 6},
+	})
+
+	m, err := db.GetMemoryByID(ctx, mems[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := md5.Sum([]byte("新事实"))
+	if m.Hash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("update 后 hash 仍对应旧正文: %q", m.Hash)
+	}
+	// 旧正文已经不在库中，可以重新写入；新正文则必须继续去重。
+	if n := mustApplyOps(t, db, "u-hash", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "旧事实", Importance: 5},
+	}); n != 1 {
+		t.Fatalf("旧正文重新 add = %d, want 1", n)
+	}
+	if n := mustApplyOps(t, db, "u-hash", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "新事实", Importance: 5},
+	}); n != 0 {
+		t.Fatalf("新正文重复 add = %d, want 0", n)
+	}
+}
+
+func TestPG_RepairMemoryHashSQL(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	mustApplyOps(t, db, "u-repair", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "旧事实", Importance: 5},
+	})
+	// 模拟 M5 历史 bug：正文已更新，hash 仍是旧正文。
+	if _, err := db.pool.Exec(ctx, "UPDATE memories SET text='新事实' WHERE user_id='u-repair'"); err != nil {
+		t.Fatal(err)
+	}
+	sql, err := os.ReadFile("repair_memory_hash.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatalf("repair SQL: %v", err)
+	}
+	mems, _ := db.ListProfileMemories(ctx, "u-repair")
+	sum := md5.Sum([]byte("新事实"))
+	if len(mems) != 1 || mems[0].Hash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("历史 hash 未修复: %+v", mems)
+	}
+	var repairs int
+	if err := db.pool.QueryRow(ctx,
+		"SELECT count(*) FROM memory_ops WHERE user_id='u-repair' AND source='repair:memory-hash-v1'").Scan(&repairs); err != nil {
+		t.Fatal(err)
+	}
+	if repairs != 1 {
+		t.Fatalf("修复应写一条审计，got %d", repairs)
+	}
+	// 幂等：第二次执行不再产生审计或数据变化。
+	if _, err := db.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	if got := countOps(t, db, "u-repair"); got != 2 {
+		t.Fatalf("重复执行不应新增修复审计，total=%d", got)
+	}
+}
+
+func TestPG_ApplyMemoryOpsAtVersion_RejectsStaleSnapshot(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	mustApplyOps(t, db, "u-version", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "旧偏好", Importance: 5},
+	})
+	mems, _ := db.ListProfileMemories(ctx, "u-version")
+	version, err := db.GetMemoryVersion(ctx, "u-version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟 agent memory_save 在 pass 读取后、提交前直写。
+	if _, err := db.ApplyMemoryOps(ctx, "u-version", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "新偏好", Importance: 8},
+	}, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ApplyMemoryOpsAtVersion(ctx, "u-version", []MemoryOp{
+		{Op: "update", TargetType: "memory", TargetID: mems[0].ID, Text: "旧快照更新", Importance: 5},
+	}, "pass:stale", version)
+	if !errors.Is(err, ErrMemoryConflict) {
+		t.Fatalf("旧快照提交应返回 ErrMemoryConflict: %v", err)
+	}
+	m, _ := db.GetMemoryByID(ctx, mems[0].ID)
+	if m.Text != "旧偏好" {
+		t.Fatalf("冲突提交不应修改旧行: %+v", m)
+	}
+}
+
+func TestPG_ApplyMemoryOpsAtVersion_CommittedRetryIsIdempotent(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	version, err := db.GetMemoryVersion(ctx, "u-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := MemoryOp{Op: "add", TargetType: "memory", Type: "profile", Text: "已提交事实", Importance: 7}
+	first, err := db.ApplyMemoryOpsAtVersion(ctx, "u-retry", []MemoryOp{op}, "pass:retry", version)
+	if err != nil || first != 1 {
+		t.Fatalf("first apply = %d, err=%v", first, err)
+	}
+	// 模拟 Apply 已提交但成功响应丢失，Temporal 用原版本重试同一 activity。
+	second, err := db.ApplyMemoryOpsAtVersion(ctx, "u-retry", []MemoryOp{op}, "pass:retry", version)
+	if err != nil || second != 1 {
+		t.Fatalf("committed retry = %d, err=%v", second, err)
+	}
+	if got := countOps(t, db, "u-retry"); got != 1 {
+		t.Fatalf("重试不得重复审计，got %d", got)
+	}
+}
+
+func TestPG_MemoryUpdateToExistingTextMergesDuplicate(t *testing.T) {
+	db := newTestPG(t)
+	ctx := context.Background()
+	mustApplyOps(t, db, "u-merge", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "旧偏好", Importance: 5},
+		{Op: "add", TargetType: "memory", Type: "profile", Text: "新偏好", Importance: 8},
+	})
+	mems, _ := db.ListProfileMemories(ctx, "u-merge")
+	var oldID uuid.UUID
+	for _, m := range mems {
+		if m.Text == "旧偏好" {
+			oldID = m.ID
+		}
+	}
+	if _, err := db.ApplyMemoryOps(ctx, "u-merge", []MemoryOp{
+		{Op: "update", TargetType: "memory", TargetID: oldID, Text: "新偏好", Importance: 9},
+	}, "pass:merge"); err != nil {
+		t.Fatalf("update 撞已有 hash 不应破坏整批: %v", err)
+	}
+	mems, _ = db.ListProfileMemories(ctx, "u-merge")
+	if len(mems) != 1 || mems[0].Text != "新偏好" || mems[0].ID != oldID || mems[0].Importance != 9 {
+		t.Fatalf("合并应保留 update target 并应用元数据: %+v", mems)
+	}
+	if got := countOps(t, db, "u-merge"); got != 4 {
+		t.Fatalf("审计应含两次 seed + 隐式 delete + update，got %d", got)
 	}
 }
 
@@ -255,6 +409,14 @@ func TestPG_SearchMemories(t *testing.T) {
 	hits, _ = db.SearchMemories(ctx, "u-search", "不存在的关键词", 10)
 	if len(hits) != 0 {
 		t.Fatalf("miss hits = %d, want 0", len(hits))
+	}
+	past := int32(-10)
+	mustApplyOps(t, db, "u-search", []MemoryOp{
+		{Op: "add", TargetType: "memory", Type: "note", Text: "过期检索便签", Importance: 5, TTLMinutes: &past},
+	})
+	hits, err = db.SearchMemories(ctx, "u-search", "过期检索", 10)
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("过期 Note 不应被搜索到: hits=%+v err=%v", hits, err)
 	}
 	// 别人的记忆搜不到
 	hits, _ = db.SearchMemories(ctx, "u-other", "验收", 10)
