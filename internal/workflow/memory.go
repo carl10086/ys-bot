@@ -374,8 +374,12 @@ func buildExtractUserMessage(msgs []pg.Message, mems []pg.Memory, skills []pg.Sk
 		case pg.KindAssistant:
 			b.WriteString("助手: " + pg.ParseText(m.Content) + "\n")
 		case pg.KindToolCall:
-			if _, name, _, ok := pg.ParseToolCall(m.Content); ok {
-				b.WriteString("（助手调用工具 " + name + "）\n")
+			if step, ok := pg.ParseToolStep(m.Content); ok {
+				names := make([]string, 0, len(step.Calls))
+				for _, c := range step.Calls {
+					names = append(names, c.Name)
+				}
+				b.WriteString("（助手调用工具 " + strings.Join(names, ", ") + "）\n")
 			}
 		case pg.KindToolResult:
 			if _, name, out, ok := pg.ParseToolResult(m.Content); ok {

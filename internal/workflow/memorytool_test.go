@@ -21,15 +21,12 @@ func TestTurnWorkflow_MemoryToolNeverWakesVM(t *testing.T) {
 
 	tc := agent.ToolCall{ID: "c1", Name: "memory_save", Input: `{"type":"profile","text":"偏好简短"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "记住"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "记下了"}, nil).Once()
 	env.OnActivity("ExecMemoryTool", mock.Anything, mock.Anything).
 		Return(`{"saved":true,"applied":1}`, nil).Once()
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(1), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 	// EnsureAwake / ExecTool 故意不 mock：被调即测试失败

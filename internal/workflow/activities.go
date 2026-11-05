@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 
 	"ys-bot/internal/agent"
@@ -115,7 +117,10 @@ func (a *Activities) StartSleepWorkflows(ctx context.Context, ids []string, idle
 }
 
 // LoadHistory 从 PG 读会话全部消息，投影为 agent 历史（映射规则见 history.go）。
-func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent.Message, error) {
+// loadHistory 会话历史投影 + 记忆装配。
+// 纯读，不单独成 activity：activity 的入参会被写进 event history，
+// 而"读出来再传下去"的历史在恢复时毫无用处（可重建），只白占体积（20 步约 4MB）。
+func (a *Activities) loadHistory(ctx context.Context, sessionID string) ([]agent.Message, error) {
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
 		return nil, err
@@ -124,7 +129,17 @@ func (a *Activities) LoadHistory(ctx context.Context, sessionID string) ([]agent
 	if err != nil {
 		return nil, err
 	}
-	return projectHistory(msgs), nil
+	history := projectHistory(msgs)
+	// 注入失败降级（review I3）：PG 抖动不该搞挂整个对话——记忆是增强不是依赖
+	sys, err := a.systemPrompt(ctx, sid)
+	if err != nil {
+		warn(ctx, "build system prompt failed, 降级为无记忆注入", "err", err)
+		return history, nil
+	}
+	if sys != "" {
+		history = append([]agent.Message{{Role: "system", Content: sys}}, history...)
+	}
+	return history, nil
 }
 
 // shellTool M2 唯一工具（spec：先跑通架构，更多工具参考 envd/aider/codex 再加）。
@@ -191,7 +206,23 @@ func isMemoryTool(name string) bool {
 	return strings.HasPrefix(name, "memory_")
 }
 
-func (a *Activities) CallLLM(ctx context.Context, history []agent.Message) (agent.StepResult, error) {
+// CallLLMInput 只带指针：历史由 activity 现读（见 loadHistory 注释）。
+type CallLLMInput struct {
+	SessionID string
+}
+
+func (a *Activities) CallLLM(ctx context.Context, in CallLLMInput) (agent.StepResult, error) {
+	// 心跳让取消能穿透到正在跑的 HTTP 请求（见 heartbeat 注释）。
+	stop := heartbeat(ctx)
+	defer stop()
+	history, err := a.loadHistory(ctx, in.SessionID)
+	if err != nil {
+		return agent.StepResult{}, err
+	}
+	return a.decide(ctx, history)
+}
+
+func (a *Activities) decide(ctx context.Context, history []agent.Message) (agent.StepResult, error) {
 	// 记忆工具始终可用（纯对话也要能记）；VM 工具要有 Driver（懒唤醒红线：纯对话不碰 VM）
 	tools := make([]agent.ToolDef, 0, len(memoryToolDefs)+1)
 	tools = append(tools, memoryToolDefs...)
@@ -261,23 +292,39 @@ func (a *Activities) ExecTool(ctx context.Context, in ExecToolInput) (string, er
 	return string(out), nil
 }
 
+// WriteMessage 幂等落库 + 顺带发变更信号。
+// msg_id 是 workflow 生成的确定性键：activity 至少一次，重试/崩溃恢复不得写重复行。
 func (a *Activities) WriteMessage(ctx context.Context, in WriteMessageInput) (int64, error) {
 	sid, err := uuid.Parse(in.SessionID)
 	if err != nil {
 		return 0, err
+	}
+	var msgID *uuid.UUID
+	if in.MsgID != "" {
+		u, err := uuid.Parse(in.MsgID)
+		if err != nil {
+			return 0, fmt.Errorf("invalid msg_id %q: %w", in.MsgID, err)
+		}
+		msgID = &u
 	}
 	content := in.Content
 	if content == nil {
 		content = pg.MarshalText(in.Text)
 	}
 	seq, _, err := a.PG.InsertMessage(ctx, pg.Message{
-		SessionID: sid, Kind: in.Kind, Content: content, TurnID: in.TurnID,
+		SessionID: sid, MsgID: msgID, Kind: in.Kind, Content: content, TurnID: in.TurnID,
 	})
-	return seq, err
-}
-
-func (a *Activities) PublishChanged(ctx context.Context, sessionID string) error {
-	return a.Redis.PublishChanged(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	// 变更信号折进写 activity：它可丢（丢了 SPA 下次戳还会补），不值得一次独立的
+	// task queue 往返 + 3 个事件。
+	if a.Redis != nil {
+		if err := a.Redis.PublishChanged(ctx, in.SessionID); err != nil {
+			warn(ctx, "publish changed failed", "err", err)
+		}
+	}
+	return seq, nil
 }
 
 func (a *Activities) ReleaseTurn(ctx context.Context, sessionID, workflowID string) error {
@@ -315,6 +362,40 @@ func (a *Activities) StartMemoryPass(ctx context.Context, sessionID, turnID stri
 func toolFail(format string, args ...any) (string, error) {
 	b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": fmt.Sprintf(format, args...)})
 	return string(b), nil
+}
+
+// heartbeat 长阻塞 activity 的取消通道：Temporal 只把取消请求投递给有心跳的活动
+// （官方：Activities must heartbeat to receive cancellations），否则用户打断后
+// 这个 HTTP 请求仍会跑满 StartToCloseTimeout。非 activity 上下文返回 no-op。
+func heartbeat(ctx context.Context) (stop func()) {
+	if !activity.IsActivity(ctx) {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				activity.RecordHeartbeat(ctx, nil)
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// warn 活动内用 Temporal logger；单测直接调用（无 activity 上下文）时退回标准日志。
+func warn(ctx context.Context, msg string, args ...any) {
+	if activity.IsActivity(ctx) {
+		activity.GetLogger(ctx).Warn(msg, args...)
+		return
+	}
+	log.Println(append([]any{msg}, args...)...)
 }
 
 // ===== M5 服务端记忆工具（spec Q6；不经 VM/agentd，第二条工具执行路径）=====

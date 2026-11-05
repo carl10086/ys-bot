@@ -17,11 +17,12 @@ func projectHistory(msgs []pg.Message) []agent.Message {
 		case pg.KindAssistant:
 			out = append(out, agent.Message{Role: "assistant", Content: pg.ParseText(m.Content)})
 		case pg.KindToolCall:
-			if id, name, input, ok := pg.ParseToolCall(m.Content); ok {
-				out = append(out, agent.Message{
-					Role:      "assistant",
-					ToolCalls: []agent.ToolCall{{ID: id, Name: name, Input: input}},
-				})
+			if step, ok := pg.ParseToolStep(m.Content); ok {
+				calls := make([]agent.ToolCall, 0, len(step.Calls))
+				for _, c := range step.Calls {
+					calls = append(calls, agent.ToolCall{ID: c.ID, Name: c.Name, Input: c.Input})
+				}
+				out = append(out, agent.Message{Role: "assistant", Content: step.Text, ToolCalls: calls})
 			}
 		case pg.KindToolResult:
 			if callID, name, output, ok := pg.ParseToolResult(m.Content); ok {

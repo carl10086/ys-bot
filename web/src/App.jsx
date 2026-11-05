@@ -242,7 +242,14 @@ export default function App() {
                     whiteSpace: 'pre-wrap',
                   }}
                 >
-                  {m.content?.text ?? JSON.stringify(m.content)}
+                  {m.content?.calls
+                    ? [
+                        m.content.text,
+                        m.content.calls.map((c) => c.name).join(', '),
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')
+                    : (m.content?.text ?? JSON.stringify(m.content))}
                 </span>
                 <div style={{ fontSize: 11, color: '#999' }}>
                   #{m.seq} {m.kind}

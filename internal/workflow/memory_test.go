@@ -339,8 +339,8 @@ func TestMemoryPassWorkflow_EndToEnd(t *testing.T) {
 	}
 }
 
-// BuildSystemPrompt 接线（真 PG）：session→user→四路查询→组装；过期 note 不进。
-func TestActivities_BuildSystemPrompt(t *testing.T) {
+// systemPrompt 接线（真 PG）：session→user→四路查询→组装；过期 note 不进。
+func TestActivities_SystemPrompt(t *testing.T) {
 	db, _ := newMemoryTestPG(t)
 	ctx := context.Background()
 
@@ -360,7 +360,7 @@ func TestActivities_BuildSystemPrompt(t *testing.T) {
 	}
 
 	a := &Activities{PG: db, BasePrompt: "BASE"}
-	out, err := a.BuildSystemPrompt(ctx, sess.ID.String())
+	out, err := a.systemPrompt(ctx, sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
