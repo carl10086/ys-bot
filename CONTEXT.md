@@ -35,7 +35,7 @@
 
 | 字段 | 谁生成 | 规则 |
 |---|---|---|
-| `msg_id` | **客户端**（SPA） | uuidv4；幂等靠 PG `UNIQUE` + `ON CONFLICT`，无 Redis 幂等窗 |
+| `msg_id` | 用户消息：**客户端**（SPA，uuidv4）；assistant/tool 消息：**server** | 幂等键；PG `UNIQUE` + `ON CONFLICT`，无 Redis 幂等窗。server 侧对同一 turn 的同一写步骤恒定（重放/重试不变） |
 | `session_id` | server | uuidv7 |
 | `turn_id` | server | = Temporal workflowID：`turn:{sessionId}:{uuid}`；**没有** turn 级自增序号 |
 | `seq` | server | **消息级**序号，会话内递增；SPA 回显按它排序、断档重拉 |
@@ -51,6 +51,7 @@
 | never mid-turn | 休眠只在 VM 真正空闲时发生：活动刷新 `last_activity_at`，休眠器带过期条件 CAS 占坑，抢不到就放弃（M4 定案 2026-10-30） |
 | 降级 boot | resume 失败自动退回模板全新 boot——快照只是优化，会话状态在 PG，用户无感（M4 定案 2026-10-30） |
 | 每步落库 | turn 内 model/tool 每一步都写 `messages`（讲座 15 黑条） |
+| PG 是唯一 prompt 源 | turn 的历史每次从 `messages` 现读现投影；workflow 只持控制状态（step / sandboxID / lastSeq），不保存历史副本 |
 | 记忆跨会话 | memory/skills 归 user 不归 session；删会话不动记忆（M5 定案 2026-11-02） |
 | pass 不挡主链路 | memory pass 在回复落库后异步跑，失败只记日志；偏好存在秒级可见性窗口，v1 接受（M5 定案 2026-11-02） |
 

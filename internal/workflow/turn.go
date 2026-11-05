@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"ys-bot/internal/agent"
@@ -22,6 +24,7 @@ type TurnInput struct {
 
 type WriteMessageInput struct {
 	SessionID string
+	MsgID     string // 确定性幂等键（workflow 侧生成；activity 重试不写重复行）
 	Kind      string // assistant / tool_call / tool_result
 	Text      string // Content 为空时门面内包成 {"text": ...} jsonb
 	Content   []byte // tool 消息：调用方直接给 jsonb 原文
@@ -31,14 +34,42 @@ type WriteMessageInput struct {
 // maxToolSteps 单 turn 工具调用步数上限（防 loop 失控）。
 const maxToolSteps = 20
 
+// activity 重试策略是安全约束，不是调参（断言见 options_test.go）：
+//   - Temporal 默认策略是无限重试——一个必然失败的 turn 会永久占着会话锁（TTL 600s）；
+//   - shell 有副作用且 agentd 没有幂等键，重试 = 重跑命令；
+//   - CallLLM 长阻塞，没有心跳就收不到取消请求。
+var (
+	// aoRetry 读 PG / 幂等写：可安全重试，但次数与总时长都要有界。
+	aoRetry = workflow.ActivityOptions{
+		StartToCloseTimeout:    2 * time.Minute,
+		ScheduleToCloseTimeout: 5 * time.Minute,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    2 * time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    30 * time.Second,
+			MaximumAttempts:    5,
+		},
+	}
+	// aoExec 不可幂等：失败就交给模型看（exit_code=-1），不重跑命令。
+	aoExec = workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	}
+	// aoLLM 必须心跳：Temporal 只把取消投递给有心跳的 activity。
+	// 心跳间隔 10s（activity 内），超时 30s 容忍两次丢失。
+	aoLLM = workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		HeartbeatTimeout:    30 * time.Second,
+		RetryPolicy:         aoRetry.RetryPolicy,
+	}
+)
+
 // TurnWorkflow 一个 turn 的完整生命周期。
 // 锁的释放用 disconnected context：被打断（CancelWorkflow）时也要放锁。
 func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
-	ao := workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Minute,
-		// LLM 调用可能抖动，activity 级重试交给 Temporal 默认策略
-	}
-	ctx = workflow.WithActivityOptions(ctx, ao)
+	ctx = workflow.WithActivityOptions(ctx, aoRetry)
+	llmCtx := workflow.WithActivityOptions(ctx, aoLLM)
+	execCtx := workflow.WithActivityOptions(ctx, aoExec)
 	logger := workflow.GetLogger(ctx)
 
 	turnID := workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -66,57 +97,49 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 		return nil
 	}
 
-	var history []agent.Message
-	if err := workflow.ExecuteActivity(ctx, "LoadHistory", in.SessionID).Get(ctx, &history); err != nil {
-		return fmt.Errorf("load history: %w", err)
-	}
-
-	// M5 注入：装配记忆的系统提示作为 history[0]（不落库；空串 = 无 base 无记忆，不插）
-	// 注入失败降级为空串继续（review I3）：PG 抖动不该搞挂整个对话——记忆是增强不是依赖
-	var sysprompt string
-	if err := workflow.ExecuteActivity(ctx, "BuildSystemPrompt", in.SessionID).Get(ctx, &sysprompt); err != nil {
-		logger.Warn("build system prompt failed, 降级为无记忆注入", "err", err)
-	}
-	if sysprompt != "" {
-		history = append([]agent.Message{{Role: "system", Content: sysprompt}}, history...)
-	}
-
 	// 工具 loop（spec §4）：模型一次 Step 要么回文本（收尾），要么给一批 tool_calls
-	// （首个 tool_call 前懒唤醒 VM → 逐个执行 → 每步落库 + 发信号 → 继续）。
+	// （首个 tool_call 前懒唤醒 VM → 逐个执行 → 每步落库 → 继续）。
+	// 对话历史不在这里维护：CallLLM 每次从 PG 现取（PG 是唯一 prompt 源），
+	// workflow 只记控制状态（step / sandboxID / lastSeq）——event history
+	// 只随"决策"增长，不随"文本"增长。
 	sandboxID := ""
 	var lastSeq int64
-	// writeAndSignal 落一条消息并发空信号（信号失败无害：丢了 SPA 下次还会被戳）。
-	writeAndSignal := func(in WriteMessageInput) error {
-		if err := workflow.ExecuteActivity(ctx, "WriteMessage", in).Get(ctx, nil); err != nil {
-			return err
-		}
-		_ = workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil)
-		return nil
+	// write 落一条消息；变更信号在 WriteMessage 内顺带发出（可丢信号不占独立往返）。
+	// 每条写都带确定性幂等键：activity 重试/worker 崩溃后恢复不会写重复行。
+	writeNo := 0
+	write := func(in WriteMessageInput) (int64, error) {
+		writeNo++
+		in.MsgID = msgIDFor(turnID, writeNo)
+		var seq int64
+		err := workflow.ExecuteActivity(ctx, "WriteMessage", in).Get(ctx, &seq)
+		return seq, err
 	}
 	for step := 0; ; step++ {
 		var res agent.StepResult
-		if err := workflow.ExecuteActivity(ctx, "CallLLM", history).Get(ctx, &res); err != nil {
+		if err := workflow.ExecuteActivity(llmCtx, "CallLLM", CallLLMInput{SessionID: in.SessionID}).Get(ctx, &res); err != nil {
 			return fmt.Errorf("call llm: %w", err)
 		}
 		if len(res.ToolCalls) == 0 {
-			err := workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+			seq, err := write(WriteMessageInput{
 				SessionID: in.SessionID,
 				Kind:      "assistant",
 				Text:      res.Text,
 				TurnID:    turnID,
-			}).Get(ctx, &lastSeq)
+			})
 			if err != nil {
 				return fmt.Errorf("write message: %w", err)
 			}
+			lastSeq = seq
 			break
 		}
 		if step >= maxToolSteps {
-			_ = workflow.ExecuteActivity(ctx, "WriteMessage", WriteMessageInput{
+			seq, _ := write(WriteMessageInput{
 				SessionID: in.SessionID,
 				Kind:      "assistant",
 				Text:      fmt.Sprintf("（工具调用超过单 turn 上限 %d 次，先停在这里）", maxToolSteps),
 				TurnID:    turnID,
-			}).Get(ctx, &lastSeq)
+			})
+			lastSeq = seq
 			break
 		}
 		// M5：只有 VM 工具（shell）才懒唤醒；memory_* 走服务端路径，纯记忆对话不碰 VM
@@ -132,15 +155,16 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 				return fmt.Errorf("ensure awake: %w", err)
 			}
 		}
-		history = append(history, agent.Message{Role: "assistant", Content: res.Text, ToolCalls: res.ToolCalls})
+		// 一步一条 assistant 消息：文本 + 全部 tool_calls 同属一个回合，一起落库，
+		// projectHistory 才能原样还原成一条 assistant 消息（多调用不会被拆散）。
+		if _, err := write(WriteMessageInput{
+			SessionID: in.SessionID, Kind: "tool_call",
+			Content: pg.MarshalToolStep(pg.ToolStep{Text: res.Text, Calls: pgToolCalls(res.ToolCalls)}),
+			TurnID:  turnID,
+		}); err != nil {
+			return fmt.Errorf("write tool_call: %w", err)
+		}
 		for _, tc := range res.ToolCalls {
-			if err := writeAndSignal(WriteMessageInput{
-				SessionID: in.SessionID, Kind: "tool_call",
-				Content: pg.MarshalToolCall(tc.ID, tc.Name, tc.Input), TurnID: turnID,
-			}); err != nil {
-				return fmt.Errorf("write tool_call: %w", err)
-			}
-
 			var out string
 			var toolErr error
 			if isMemoryTool(tc.Name) {
@@ -149,7 +173,7 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 					SessionID: in.SessionID, Name: tc.Name, Input: tc.Input,
 				}).Get(ctx, &out)
 			} else {
-				toolErr = workflow.ExecuteActivity(ctx, "ExecTool", ExecToolInput{
+				toolErr = workflow.ExecuteActivity(execCtx, "ExecTool", ExecToolInput{
 					SandboxID: sandboxID, Name: tc.Name, Input: tc.Input,
 				}).Get(ctx, &out)
 			}
@@ -159,19 +183,31 @@ func TurnWorkflow(ctx workflow.Context, in TurnInput) error {
 				b, _ := json.Marshal(map[string]any{"exit_code": -1, "stderr": toolErr.Error()})
 				out = string(b)
 			}
-			if err := writeAndSignal(WriteMessageInput{
+			if _, err := write(WriteMessageInput{
 				SessionID: in.SessionID, Kind: "tool_result",
 				Content: pg.MarshalToolResult(tc.ID, tc.Name, out), TurnID: turnID,
 			}); err != nil {
 				return fmt.Errorf("write tool_result: %w", err)
 			}
-			history = append(history, agent.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Name, Content: out})
 		}
 	}
 
-	if err := workflow.ExecuteActivity(ctx, "PublishChanged", in.SessionID).Get(ctx, nil); err != nil {
-		return fmt.Errorf("publish changed: %w", err)
-	}
 	logger.Info("turn done", "batch", len(batch), "replySeq", lastSeq)
 	return nil
+}
+
+// msgIDFor 写消息的确定性幂等键。
+// turnID 每次 turn 唯一，写序号在重放时完全一致；name-based UUID 是纯函数，
+// 不需要 SideEffect（那会多记一个 Marker 事件），也不会引入随机性。
+func msgIDFor(turnID string, n int) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s#%d", turnID, n))).String()
+}
+
+// pgToolCalls agent 工具调用 → 落库形状（一个 assistant 回合的全部调用写在一条消息里）。
+func pgToolCalls(calls []agent.ToolCall) []pg.ToolCall {
+	out := make([]pg.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, pg.ToolCall{ID: c.ID, Name: c.Name, Input: c.Input})
+	}
+	return out
 }

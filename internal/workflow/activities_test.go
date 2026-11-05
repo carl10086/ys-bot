@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"ys-bot/internal/agent"
+	"ys-bot/internal/store/pg"
 )
 
 // fakeAgent / fakeDriver：只存在于测试的替身，不进非测试代码。
@@ -30,7 +31,7 @@ func (fakeDriver) SleepVM(context.Context, uuid.UUID) error { return nil }
 // M5 起 memory_* 服务端工具始终可用（纯对话也要能记，spec Q6）。
 func TestCallLLM_NoDriverNoTools(t *testing.T) {
 	fa := &fakeAgent{}
-	if _, err := (&Activities{Agent: fa}).CallLLM(context.Background(), nil); err != nil {
+	if _, err := (&Activities{Agent: fa}).decide(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, tool := range fa.gotTools {
@@ -46,7 +47,7 @@ func TestCallLLM_NoDriverNoTools(t *testing.T) {
 // 有 Driver 时追加 shell 工具（memory 工具仍在）。
 func TestCallLLM_WithDriverGivesShell(t *testing.T) {
 	fa := &fakeAgent{}
-	if _, err := (&Activities{Agent: fa, Driver: fakeDriver{}}).CallLLM(context.Background(), nil); err != nil {
+	if _, err := (&Activities{Agent: fa, Driver: fakeDriver{}}).decide(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(fa.gotTools) != len(memoryToolDefs)+1 || fa.gotTools[len(fa.gotTools)-1].Name != "shell" {
@@ -71,5 +72,42 @@ func TestExecTool_Validation(t *testing.T) {
 		if !strings.Contains(out, `"exit_code":-1`) {
 			t.Fatalf("%v 应返回 exit_code=-1: %s", in, out)
 		}
+	}
+}
+
+// Temporal activity 是"至少一次"：同一个幂等键重试不得写重复行，且返回同一 seq。
+// 否则 worker 在 ACK 前崩溃 → 重试 → 会话里同一条回复出现两次。
+func TestWriteMessage_Idempotent(t *testing.T) {
+	p := newTestPG(t)
+	ctx := context.Background()
+	sess, err := p.CreateSession(ctx, "u-idem", "s-idem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acts := &Activities{PG: p}
+	in := WriteMessageInput{
+		SessionID: sess.ID.String(),
+		MsgID:     uuid.NewString(),
+		Kind:      pg.KindAssistant,
+		Text:      "只写一次",
+		TurnID:    "turn:1",
+	}
+	seq1, err := acts.WriteMessage(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq2, err := acts.WriteMessage(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seq1 != seq2 {
+		t.Fatalf("重试返回了不同 seq: %d vs %d", seq1, seq2)
+	}
+	msgs, err := p.ListMessages(ctx, sess.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("重试写了 %d 行，want 1", len(msgs))
 	}
 }

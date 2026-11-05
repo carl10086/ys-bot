@@ -13,11 +13,29 @@ type textContent struct {
 	Text string `json:"text"`
 }
 
-// toolCallContent kind=tool_call：{"id","name","input"}。
-type toolCallContent struct {
+// ToolCall 一次工具调用。中性结构：pg 包不 import agent，由调用方转换。
+type ToolCall struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Input string `json:"input"`
+}
+
+// ToolStep 一个 assistant 回合：文本 + 该回合发出的全部工具调用。
+// 一步一行——同一回合的多个调用必须同行，否则回灌 provider 时
+// tool_use / tool_result 的配对关系会错位。
+type ToolStep struct {
+	Text  string
+	Calls []ToolCall
+}
+
+// toolStepWire 是 ToolStep 的存储形状。
+// 保留顶层 id/name/input 字段是为了读 2026-11-05 之前"一次调用一行"的老数据。
+type toolStepWire struct {
+	Text  string     `json:"text,omitempty"`
+	Calls []ToolCall `json:"calls,omitempty"`
+	ID    string     `json:"id,omitempty"`
+	Name  string     `json:"name,omitempty"`
+	Input string     `json:"input,omitempty"`
 }
 
 // toolResultContent kind=tool_result：{"tool_call_id","name","output"}。
@@ -42,19 +60,26 @@ func ParseText(content []byte) string {
 	return string(content)
 }
 
-// MarshalToolCall kind=tool_call 的 content。
-func MarshalToolCall(id, name, input string) []byte {
-	b, _ := json.Marshal(toolCallContent{id, name, input})
+// MarshalToolStep kind=tool_call 的 content：{"text","calls"}，空 text 不落库。
+func MarshalToolStep(step ToolStep) []byte {
+	b, _ := json.Marshal(toolStepWire{Text: step.Text, Calls: step.Calls})
 	return b
 }
 
-// ParseToolCall 是 MarshalToolCall 的逆；json 解析失败返回 ok=false（调用方跳过该行）。
-func ParseToolCall(content []byte) (id, name, input string, ok bool) {
-	var v toolCallContent
+// ParseToolStep 是 MarshalToolStep 的逆，并兼容旧的单调用形状。
+// 既无调用也无标识的坏行返回 ok=false（调用方跳过，不造空 assistant）。
+func ParseToolStep(content []byte) (ToolStep, bool) {
+	var v toolStepWire
 	if json.Unmarshal(content, &v) != nil {
-		return "", "", "", false
+		return ToolStep{}, false
 	}
-	return v.ID, v.Name, v.Input, true
+	if len(v.Calls) > 0 {
+		return ToolStep{Text: v.Text, Calls: v.Calls}, true
+	}
+	if v.ID != "" || v.Name != "" {
+		return ToolStep{Calls: []ToolCall{{ID: v.ID, Name: v.Name, Input: v.Input}}}, true
+	}
+	return ToolStep{}, false
 }
 
 // MarshalToolResult kind=tool_result 的 content。

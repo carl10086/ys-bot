@@ -62,11 +62,8 @@ func buildSystemPrompt(base string, profile, logs, notes []pg.Memory, skills []p
 
 // BuildSystemPrompt 注入装配 activity：session → user → 四路查询 → 组装。
 // 每个 turn 都跑——记忆变了下一 turn 就生效（ spec Q5）。
-func (a *Activities) BuildSystemPrompt(ctx context.Context, sessionID string) (string, error) {
-	sid, err := uuid.Parse(sessionID)
-	if err != nil {
-		return "", err
-	}
+// systemPrompt 每次决策现装配注入内容（纯读，不单独成 activity）。
+func (a *Activities) systemPrompt(ctx context.Context, sid uuid.UUID) (string, error) {
 	sess, err := a.PG.GetSession(ctx, sid)
 	if err != nil {
 		return "", err

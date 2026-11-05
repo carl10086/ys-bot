@@ -23,15 +23,10 @@ func TestTurnWorkflow_HappyPath(t *testing.T) {
 
 	var written WriteMessageInput
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1, 2}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{
-		{Role: "user", Content: "你好"},
-	}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "你好，我是助手"}, nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { written = args.Get(1).(WriteMessageInput) }).
 		Return(int64(3), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -63,7 +58,7 @@ func TestTurnWorkflow_EmptyBatchSkipsLLM(t *testing.T) {
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{}, nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
-	// LoadHistory / CallLLM / WriteMessage 未注册 mock，被调用即测试失败
+	// CallLLM / WriteMessage 未注册 mock，被调用即测试失败
 
 	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
 	if err := env.GetWorkflowError(); err != nil {
@@ -78,8 +73,6 @@ func TestTurnWorkflow_LLMErrorStillReleasesLock(t *testing.T) {
 	env.RegisterActivity(&Activities{}) // 只注册名字；真实调用被 OnActivity mock 拦截
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return("", errors.New("llm down"))
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -99,8 +92,6 @@ func TestTurnWorkflow_ExecErrorProducesValidJSON(t *testing.T) {
 
 	tc := agent.ToolCall{ID: "c1", Name: "shell", Input: `{"cmd":"ls"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
@@ -117,7 +108,6 @@ func TestTurnWorkflow_ExecErrorProducesValidJSON(t *testing.T) {
 				toolResult = in.Content
 			}
 		}).Return(int64(1), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -164,8 +154,6 @@ func TestTurnWorkflow_ToolLoop(t *testing.T) {
 	var kinds []string
 	tc := agent.ToolCall{ID: "call_1", Name: "shell", Input: `{"cmd":"ls /etc | head -5"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "看看 /etc"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil).Once()
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
@@ -176,7 +164,6 @@ func TestTurnWorkflow_ToolLoop(t *testing.T) {
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { kinds = append(kinds, args.Get(1).(WriteMessageInput).Kind) }).
 		Return(int64(1), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -205,11 +192,8 @@ func TestTurnWorkflow_PlainChatNeverWakesVM(t *testing.T) {
 	env.RegisterActivity(&Activities{})
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "hello"}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -229,8 +213,6 @@ func TestTurnWorkflow_ToolLoopCap(t *testing.T) {
 	toolCalls := 0
 	tc := agent.ToolCall{ID: "c", Name: "shell", Input: `{"cmd":"true"}`}
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "loop"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
 		Return(agent.StepResult{ToolCalls: []agent.ToolCall{tc}}, nil)
 	env.OnActivity("EnsureAwake", mock.Anything, "s1").Return("sb-1", nil).Once()
@@ -238,7 +220,6 @@ func TestTurnWorkflow_ToolLoopCap(t *testing.T) {
 		Run(func(args mock.Arguments) { toolCalls++ }).
 		Return(`{"exit_code":0,"stdout":"","stderr":""}`, nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(1), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
 
@@ -251,36 +232,6 @@ func TestTurnWorkflow_ToolLoopCap(t *testing.T) {
 	}
 }
 
-// M5 注入：turn 启动时 BuildSystemPrompt 的结果必须作为 history[0]（role=system）喂给 CallLLM。
-func TestTurnWorkflow_SystemPromptInjected(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
-
-	var gotHistory []agent.Message
-	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("BASE\n# 关于用户的记忆\n- 偏好简短", nil)
-	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) { gotHistory = args.Get(1).([]agent.Message) }).
-		Return(agent.StepResult{Text: "ok"}, nil)
-	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
-	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
-	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
-
-	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
-	if len(gotHistory) != 2 || gotHistory[0].Role != "system" {
-		t.Fatalf("history[0] 应为 system 注入: %+v", gotHistory)
-	}
-	if !strings.Contains(gotHistory[0].Content, "偏好简短") {
-		t.Fatalf("注入内容不含记忆块: %q", gotHistory[0].Content)
-	}
-}
-
 // M5/T4：turn 收尾必须触发 memory pass，且带上 batch seqs（用户消息靠它捞）。
 func TestTurnWorkflow_StartsMemoryPass(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
@@ -289,11 +240,8 @@ func TestTurnWorkflow_StartsMemoryPass(t *testing.T) {
 
 	var gotSeqs []int64
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{7, 8}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "ok"}, nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(9), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { gotSeqs = args.Get(3).([]int64) }).Return(nil)
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
@@ -315,11 +263,8 @@ func TestTurnWorkflow_MemoryPassFailureTolerated(t *testing.T) {
 	env.RegisterActivity(&Activities{})
 
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "ok"}, nil)
 	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).
 		Return(errors.New("temporal down"))
 	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
@@ -327,27 +272,6 @@ func TestTurnWorkflow_MemoryPassFailureTolerated(t *testing.T) {
 	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("pass 触发失败不应影响 turn: %v", err)
-	}
-}
-
-// I3：BuildSystemPrompt 失败（PG 抖动）→ 降级无注入继续跑，不挂掉整个 turn。
-func TestTurnWorkflow_PromptFailureDegrades(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
-
-	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "hi"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", errors.New("pg down"))
-	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return(agent.StepResult{Text: "降级也聊"}, nil)
-	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).Return(int64(2), nil)
-	env.OnActivity("PublishChanged", mock.Anything, "s1").Return(nil)
-	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
-	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
-
-	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("注入失败不应搞挂 turn: %v", err)
 	}
 }
 
@@ -359,8 +283,6 @@ func TestTurnWorkflow_CancelledTurnStillStartsMemoryPass(t *testing.T) {
 
 	passStarted := false
 	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{5}, nil)
-	env.OnActivity("LoadHistory", mock.Anything, "s1").Return([]agent.Message{{Role: "user", Content: "记住偏好"}}, nil)
-	env.OnActivity("BuildSystemPrompt", mock.Anything, "s1").Return("", nil)
 	env.OnActivity("CallLLM", mock.Anything, mock.Anything).Return("", errors.New("模拟被打断"))
 	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { passStarted = true }).Return(nil)
@@ -373,5 +295,45 @@ func TestTurnWorkflow_CancelledTurnStillStartsMemoryPass(t *testing.T) {
 	}
 	if !passStarted {
 		t.Fatal("被打断的 turn 也必须触发 memory pass（C1）")
+	}
+}
+
+// 幂等键必须逐条不同：同一个 msg_id 出现在两次写里，第二次会被
+// ON CONFLICT DO NOTHING 静默丢弃——用户看到的是"回复少了半句"。
+func TestTurnWorkflow_WriteMsgIDsDistinct(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&Activities{})
+
+	var ids []string
+	tc := agent.ToolCall{ID: "c1", Name: "memory_search", Input: `{"query":"偏好"}`}
+	env.OnActivity("DrainQueue", mock.Anything, "s1").Return([]int64{1}, nil)
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
+		Return(agent.StepResult{Text: "我查一下", ToolCalls: []agent.ToolCall{tc}}, nil).Once()
+	env.OnActivity("CallLLM", mock.Anything, mock.Anything).
+		Return(agent.StepResult{Text: "你偏好短回答"}, nil).Once()
+	env.OnActivity("ExecMemoryTool", mock.Anything, mock.Anything).Return(`{"hits":[]}`, nil).Once()
+	env.OnActivity("WriteMessage", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { ids = append(ids, args.Get(1).(WriteMessageInput).MsgID) }).
+		Return(int64(1), nil)
+	env.OnActivity("StartMemoryPass", mock.Anything, "s1", mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("ReleaseTurn", mock.Anything, "s1", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TurnWorkflow, TurnInput{SessionID: "s1"})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow error: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("want 3 次写（tool_call/tool_result/assistant），got %d: %v", len(ids), ids)
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" {
+			t.Fatal("WriteMessage 必须带幂等键（重试会写重复行）")
+		}
+		if seen[id] {
+			t.Fatalf("重复的 msg_id: %s（后续行会被静默丢弃）", id)
+		}
+		seen[id] = true
 	}
 }
